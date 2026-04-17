@@ -499,11 +499,22 @@ export default async function Home({
           <div className="mt-5 rounded-[1.4rem] border border-[var(--stroke)] bg-white/65 p-5">
             <p className="font-semibold text-[var(--foreground)]">Quick GitHub URLs after push</p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              If you push this repo as{" "}
+              Public website versions for registration:
+            </p>
+            <div className="mt-3 space-y-2 text-sm">
+              <p className="break-all text-[var(--accent)]">
+                https://quisharoo.github.io/give-yourself-a-raise/privacy/
+              </p>
+              <p className="break-all text-[var(--accent)]">
+                https://quisharoo.github.io/give-yourself-a-raise/terms/
+              </p>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-muted">
+              Source pages stay in{" "}
               <span className="font-medium text-[var(--foreground)]">
                 github.com/Quisharoo/give-yourself-a-raise
               </span>
-              , you can use:
+              :
             </p>
             <div className="mt-3 space-y-2 text-sm">
               <p className="break-all text-[var(--accent)]">
