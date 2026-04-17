@@ -1,10 +1,10 @@
 import { VariantPage } from "@/app/variant-page";
 import type { PageSearchParams } from "@/app/variant-page";
 
-export default function Home({
+export default function ExplorerPage({
   searchParams,
 }: {
   searchParams: PageSearchParams;
 }) {
-  return <VariantPage searchParams={searchParams} variant="brief" />;
+  return <VariantPage searchParams={searchParams} variant="explorer" />;
 }

@@ -12,7 +12,10 @@ import {
   getSessionOverview,
   hasEnableBankingConfig,
 } from "@/lib/enable-banking/client";
+import { writeEnableBankingCapture } from "@/lib/enable-banking/local-capture";
 import type { EnableBankingSessionAccountReference } from "@/lib/enable-banking/types";
+
+export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   if (!hasEnableBankingConfig()) {
@@ -25,8 +28,7 @@ export async function GET(request: NextRequest) {
   }
 
   const cookieStore = await cookies();
-  const sessionId = request.nextUrl.searchParams.get("sessionId")?.trim() ??
-    cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value;
+  const sessionId = cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value;
 
   if (!sessionId) {
     return NextResponse.json(
@@ -75,10 +77,22 @@ export async function GET(request: NextRequest) {
         }),
       );
 
-      return NextResponse.json({
+      const summaryPayload = {
         accounts,
         session,
+      };
+
+      await writeEnableBankingCapture("session-summary", {
+        data: summaryPayload,
+        meta: {
+          accountCount: accounts.length,
+          dateFrom,
+          dateTo,
+          summary,
+        },
       });
+
+      return NextResponse.json(summaryPayload);
     }
 
     const overview = await getSessionOverview(
@@ -90,6 +104,16 @@ export async function GET(request: NextRequest) {
       },
       extractPsuHeaders(request.headers),
     );
+
+    await writeEnableBankingCapture("session-overview", {
+      data: overview,
+      meta: {
+        accountCount: overview.accounts.length,
+        dateFrom,
+        dateTo,
+        summary,
+      },
+    });
 
     return NextResponse.json(overview);
   } catch (error) {

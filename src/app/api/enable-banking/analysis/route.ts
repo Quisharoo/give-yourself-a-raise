@@ -10,6 +10,9 @@ import {
   getSessionOverview,
   hasEnableBankingConfig,
 } from "@/lib/enable-banking/client";
+import { writeEnableBankingCapture } from "@/lib/enable-banking/local-capture";
+
+export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   if (!hasEnableBankingConfig()) {
@@ -22,9 +25,7 @@ export async function GET(request: NextRequest) {
   }
 
   const cookieStore = await cookies();
-  const sessionId =
-    request.nextUrl.searchParams.get("sessionId")?.trim() ??
-    cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value;
+  const sessionId = cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value;
 
   if (!sessionId) {
     return NextResponse.json(
@@ -52,7 +53,29 @@ export async function GET(request: NextRequest) {
       extractPsuHeaders(request.headers),
     );
 
-    return NextResponse.json(analyzeSpending(overview.accounts));
+    const analysis = analyzeSpending(overview.accounts);
+
+    await Promise.all([
+      writeEnableBankingCapture("analysis-input-overview", {
+        data: overview,
+        meta: {
+          accountCount: overview.accounts.length,
+          dateFrom,
+          dateTo,
+        },
+      }),
+      writeEnableBankingCapture("analysis-output", {
+        data: analysis,
+        meta: {
+          accountCount: analysis.accountCount,
+          dateFrom,
+          dateTo,
+          primaryCurrency: analysis.currencySummary.primaryCurrency,
+        },
+      }),
+    ]);
+
+    return NextResponse.json(analysis);
   } catch (error) {
     if (error instanceof EnableBankingError) {
       return NextResponse.json(

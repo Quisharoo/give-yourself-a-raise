@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { Fraunces, Manrope } from "next/font/google";
+import { Public_Sans, Sora } from "next/font/google";
 import "./globals.css";
 
-const fraunces = Fraunces({
+const sora = Sora({
   subsets: ["latin"],
   variable: "--font-display",
 });
 
-const manrope = Manrope({
+const publicSans = Public_Sans({
   subsets: ["latin"],
   variable: "--font-sans",
 });
@@ -26,7 +26,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${manrope.variable} h-full antialiased`}
+      className={`${sora.variable} ${publicSans.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

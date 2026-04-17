@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/?error=Missing+authorisation+code", baseUrl));
   }
 
-  if (expectedState && returnedState && expectedState !== returnedState) {
+  if (!expectedState || !returnedState || expectedState !== returnedState) {
     return NextResponse.redirect(new URL("/?error=State+mismatch", baseUrl));
   }
 
