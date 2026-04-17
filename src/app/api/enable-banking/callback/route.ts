@@ -1,0 +1,52 @@
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+
+import {
+  createSession,
+  ENABLE_BANKING_SESSION_COOKIE,
+  ENABLE_BANKING_STATE_COOKIE,
+  extractPsuHeaders,
+} from "@/lib/enable-banking/client";
+
+export async function GET(request: NextRequest) {
+  const code = request.nextUrl.searchParams.get("code")?.trim();
+  const returnedState = request.nextUrl.searchParams.get("state")?.trim();
+  const cookieStore = await cookies();
+  const expectedState = cookieStore.get(ENABLE_BANKING_STATE_COOKIE)?.value;
+
+  if (!code) {
+    return NextResponse.redirect(new URL("/?error=Missing+authorisation+code", request.url));
+  }
+
+  if (expectedState && returnedState && expectedState !== returnedState) {
+    return NextResponse.redirect(new URL("/?error=State+mismatch", request.url));
+  }
+
+  try {
+    const session = await createSession(code, extractPsuHeaders(request.headers));
+    const sessionId =
+      session.session_id ||
+      (typeof session["session_id"] === "string" ? (session["session_id"] as string) : undefined);
+
+    if (!sessionId) {
+      throw new Error("Enable Banking did not return a session ID.");
+    }
+
+    cookieStore.set(ENABLE_BANKING_SESSION_COOKIE, sessionId, {
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 30,
+      path: "/",
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+    cookieStore.delete(ENABLE_BANKING_STATE_COOKIE);
+
+    return NextResponse.redirect(new URL("/?connected=1", request.url));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to create session";
+    return NextResponse.redirect(
+      new URL(`/?error=${encodeURIComponent(message)}`, request.url),
+    );
+  }
+}
