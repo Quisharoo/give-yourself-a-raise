@@ -1,17 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f1e8;
-  --background-strong: #ede4d3;
-  --foreground: #1f2a1f;
-  --muted: #5d6c5f;
-  --panel: rgba(255, 252, 245, 0.78);
-  --panel-strong: rgba(255, 251, 243, 0.92);
-  --stroke: rgba(43, 62, 45, 0.14);
-  --accent: #234b38;
-  --accent-soft: #d6e8dc;
-  --danger-soft: #f0d6ca;
-  --warning-soft: #efe0bf;
+  --background: #f8fafc;
+  --foreground: #0f172a;
 }
 
 @theme inline {
@@ -25,61 +16,56 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), sans-serif;
-  background-image:
-    radial-gradient(circle at top left, rgba(35, 75, 56, 0.08), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(245, 241, 232, 0.9));
-}
-
-a,
-button,
-input,
-select {
-  transition:
-    background-color 180ms ease,
-    border-color 180ms ease,
-    color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
 }
 
 ::selection {
-  background: rgba(35, 75, 56, 0.18);
+  background: rgba(37, 99, 235, 0.18);
 }
 
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--stroke);
-  box-shadow: 0 18px 50px rgba(63, 53, 33, 0.08);
-  backdrop-filter: blur(18px);
+.card {
+  border: 1px solid rgb(226 232 240);
+  background: white;
+  border-radius: 1rem;
+  padding: 1.25rem;
 }
 
-.panel-strong {
-  background: var(--panel-strong);
-}
-
-.eyebrow {
-  letter-spacing: 0.22em;
+.label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-size: 0.72rem;
-  color: var(--muted);
+  color: rgb(100 116 139);
 }
 
-.display {
-  font-family: var(--font-display), serif;
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
 }
 
-.text-muted {
-  color: var(--muted);
+.button-primary {
+  background: rgb(15 23 42);
+  color: white;
 }
 
-.focus-ring {
-  outline: none;
+.button-primary:hover {
+  background: rgb(30 41 59);
 }
 
-.focus-ring:focus-visible {
-  box-shadow: 0 0 0 3px rgba(35, 75, 56, 0.18);
+.button-secondary {
+  border: 1px solid rgb(203 213 225);
+  background: white;
+  color: rgb(15 23 42);
 }
 
-.hover-lift:hover {
-  transform: translateY(-2px);
+.button-secondary:hover {
+  background: rgb(248 250 252);
 }

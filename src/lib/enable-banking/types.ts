@@ -65,8 +65,13 @@ export interface EnableBankingBalancesResponse {
 }
 
 export interface EnableBankingTransaction {
-  bank_transaction_code?: Record<string, unknown>;
+  bank_transaction_code?: {
+    code?: string;
+    description?: string | null;
+    sub_code?: string | null;
+  };
   booking_date?: string;
+  credit_debit_indicator?: "CRDT" | "DBIT";
   creditor?: EnableBankingParty;
   debtor?: EnableBankingParty;
   entry_reference?: string;
@@ -77,6 +82,7 @@ export interface EnableBankingTransaction {
   transaction_amount: MoneyAmount;
   transaction_date?: string;
   transaction_id?: string;
+  value_date?: string;
 }
 
 export interface EnableBankingTransactionsResponse {

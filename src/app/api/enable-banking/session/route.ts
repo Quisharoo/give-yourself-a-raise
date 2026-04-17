@@ -6,9 +6,13 @@ import {
   EnableBankingError,
   ENABLE_BANKING_SESSION_COOKIE,
   extractPsuHeaders,
+  getAccountBalances,
+  getAccountTransactions,
+  getSession,
   getSessionOverview,
   hasEnableBankingConfig,
 } from "@/lib/enable-banking/client";
+import type { EnableBankingSessionAccountReference } from "@/lib/enable-banking/types";
 
 export async function GET(request: NextRequest) {
   if (!hasEnableBankingConfig()) {
@@ -38,8 +42,45 @@ export async function GET(request: NextRequest) {
     new Date(Date.now() - 1000 * 60 * 60 * 24 * 90).toISOString().slice(0, 10);
   const dateTo =
     request.nextUrl.searchParams.get("dateTo")?.trim() ?? new Date().toISOString().slice(0, 10);
+  const summary = request.nextUrl.searchParams.get("summary") === "1";
 
   try {
+    if (summary) {
+      const session = await getSession(sessionId);
+      const accountReferences = normalizeAccountReferences(session.accounts);
+      const psuHeaders = extractPsuHeaders(request.headers);
+
+      const accounts = await Promise.all(
+        accountReferences.map(async (account) => {
+          const [balances, transactionPage] = await Promise.all([
+            getAccountBalances(account.uid, psuHeaders),
+            getAccountTransactions(
+              account.uid,
+              {
+                dateFrom,
+                dateTo,
+                strategy: "default",
+              },
+              psuHeaders,
+            ),
+          ]);
+
+          return {
+            accountId: account.uid,
+            balances,
+            iban: account.iban,
+            name: account.name,
+            transactions: transactionPage.transactions.slice(0, 12),
+          };
+        }),
+      );
+
+      return NextResponse.json({
+        accounts,
+        session,
+      });
+    }
+
     const overview = await getSessionOverview(
       sessionId,
       {
@@ -69,4 +110,20 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+function normalizeAccountReferences(
+  accounts: Array<EnableBankingSessionAccountReference | string>,
+): EnableBankingSessionAccountReference[] {
+  return accounts.map((account) => {
+    if (typeof account === "string") {
+      return { uid: account };
+    }
+
+    return {
+      iban: account.iban,
+      name: account.name,
+      uid: account.uid,
+    };
+  });
 }

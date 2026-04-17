@@ -25,15 +25,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const state = createEnableBankingState();
-    const cookieStore = await cookies();
-
-    cookieStore.set(ENABLE_BANKING_STATE_COOKIE, state, {
-      httpOnly: true,
-      maxAge: 60 * 10,
-      path: "/",
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-    });
 
     const authorization = await startAuthorization({
       aspsp: {
@@ -46,7 +37,17 @@ export async function GET(request: NextRequest) {
       state,
     });
 
-    return NextResponse.redirect(authorization.url);
+    const response = NextResponse.redirect(authorization.url);
+
+    response.cookies.set(ENABLE_BANKING_STATE_COOKIE, state, {
+      httpOnly: true,
+      maxAge: 60 * 10,
+      path: "/",
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to start consent flow";
     return NextResponse.redirect(
