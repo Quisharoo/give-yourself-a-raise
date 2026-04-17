@@ -12,14 +12,30 @@ import {
 import type { EnableBankingPsuType } from "@/lib/enable-banking/types";
 
 export async function GET(request: NextRequest) {
+  const baseUrl = process.env.APP_BASE_URL?.trim() || request.nextUrl.origin;
+  const canonicalUrl = new URL(baseUrl);
+  const currentHost =
+    request.headers.get("x-forwarded-host") ||
+    request.headers.get("host") ||
+    request.nextUrl.host;
   const name = request.nextUrl.searchParams.get("name")?.trim();
   const country = request.nextUrl.searchParams.get("country")?.trim().toUpperCase();
   const psuType = (request.nextUrl.searchParams.get("psuType")?.trim() ??
     "personal") as EnableBankingPsuType;
 
+  if (currentHost !== canonicalUrl.host) {
+    const target = new URL(request.nextUrl.pathname, baseUrl);
+
+    request.nextUrl.searchParams.forEach((value, key) => {
+      target.searchParams.set(key, value);
+    });
+
+    return NextResponse.redirect(target);
+  }
+
   if (!name || !country) {
     return NextResponse.redirect(
-      new URL("/?error=Missing+bank+name+or+country", request.url),
+      new URL("/?error=Missing+bank+name+or+country", baseUrl),
     );
   }
 
@@ -51,7 +67,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to start consent flow";
     return NextResponse.redirect(
-      new URL(`/?error=${encodeURIComponent(message)}`, request.url),
+      new URL(`/?error=${encodeURIComponent(message)}`, baseUrl),
     );
   }
 }

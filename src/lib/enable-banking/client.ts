@@ -120,7 +120,7 @@ export function getEnableBankingCallbackUrl(origin?: string): string {
     );
   }
 
-  return new URL("/callback", appBaseUrl).toString();
+  return new URL("/api/enable-banking/callback", appBaseUrl).toString();
 }
 
 export function extractPsuHeaders(headers: Headers): PsuHeaders {

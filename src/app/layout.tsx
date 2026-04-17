@@ -15,7 +15,7 @@ const manrope = Manrope({
 export const metadata: Metadata = {
   title: "Give Yourself a Raise",
   description:
-    "Personal finance cockpit for finding a 10% take-home raise through smarter spending.",
+    "Diagnosis-first spending analysis for finding the few discretionary levers worth cutting.",
 };
 
 export default function RootLayout({
