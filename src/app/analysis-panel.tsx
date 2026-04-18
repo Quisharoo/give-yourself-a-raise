@@ -41,6 +41,8 @@ export function AnalysisPanel({
   connectActions,
   debugHref,
   expectedOrigin,
+  initialAnalysis,
+  initialSource,
   showDiagnostics,
   variant,
 }: {
@@ -52,10 +54,16 @@ export function AnalysisPanel({
   }>;
   debugHref: string;
   expectedOrigin: string | null;
+  initialAnalysis: SpendingAnalysis | null;
+  initialSource: "fixture" | "live" | null;
   showDiagnostics: boolean;
   variant: VariantKey;
 }) {
-  const [state, setState] = useState<AnalysisState>({ status: "loading" });
+  const [state, setState] = useState<AnalysisState>(() =>
+    initialAnalysis && initialSource
+      ? { status: "ready", analysis: initialAnalysis, source: initialSource }
+      : { status: "loading" },
+  );
   const [browserOrigin] = useState<string | null>(() =>
     typeof window === "undefined" ? null : window.location.origin,
   );
@@ -64,6 +72,10 @@ export function AnalysisPanel({
   );
 
   useEffect(() => {
+    if (initialAnalysis && initialSource) {
+      return;
+    }
+
     let cancelled = false;
     const shouldUseFixtureFallback =
       process.env.NODE_ENV !== "production" || isLocalDevelopmentHost(browserHostname);
@@ -131,7 +143,7 @@ export function AnalysisPanel({
     return () => {
       cancelled = true;
     };
-  }, [browserHostname]);
+  }, [browserHostname, initialAnalysis, initialSource]);
 
   const originMismatch =
     showDiagnostics &&
@@ -337,13 +349,6 @@ function ReadyAnalysis({
 }) {
   const baseline = analysis.baseline;
   const dominantCurrency = baseline?.currency ?? analysis.currencySummary.primaryCurrency ?? "EUR";
-  const leverCoverage = baseline
-    ? Math.min(
-        1,
-        analysis.topLevers.reduce((total, lever) => total + lever.estimatedHalfCutImpact, 0) /
-          Math.max(baseline.raiseTarget, 1),
-      )
-    : 0;
   const filteredTransactions =
     analysis.debugCounts.wealthFlowTransactions +
     analysis.debugCounts.fixedCostTransactions +
@@ -397,25 +402,6 @@ function ReadyAnalysis({
           {analysis.currencySummary.otherCurrencies.join(", ")}
         </section>
       ) : null}
-      {!showDiagnostics ? (
-        <section className="shell-panel app-status-panel">
-          <div className="flex flex-wrap gap-2">
-            <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
-              {source === "fixture" ? "Sample data" : "Live session"}
-            </span>
-            <span className="chip chip-quiet">{analysis.accountCount} accounts</span>
-            <span className="chip chip-quiet">
-              {analysis.currencySummary.primaryCurrency ?? dominantCurrency}
-            </span>
-            <span className="chip chip-quiet">{formatGeneratedAt(analysis.generatedAt)}</span>
-            {analysis.currencySummary.otherCurrencies.length > 0 ? (
-              <span className="chip chip-quiet">
-                {analysis.currencySummary.otherCurrencies.join(", ")} side-feed
-              </span>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
 
       {variant === "brief" ? (
         <BriefVariant
@@ -423,7 +409,7 @@ function ReadyAnalysis({
           baseline={baseline}
           dominantCurrency={dominantCurrency}
           filteredShare={filteredShare}
-          leverCoverage={leverCoverage}
+          source={source}
         />
       ) : null}
 
@@ -454,133 +440,282 @@ function BriefVariant({
   baseline,
   dominantCurrency,
   filteredShare,
-  leverCoverage,
+  source,
 }: {
   analysis: SpendingAnalysis;
   baseline: SpendingAnalysis["baseline"];
   dominantCurrency: string;
   filteredShare: number;
-  leverCoverage: number;
+  source: "fixture" | "live";
 }) {
-  const primaryLever = analysis.topLevers[0];
-  const secondaryLevers = analysis.topLevers.slice(1, 4);
+  const defaultTargetPercentage = baseline ? Math.round(baseline.targetPercentage * 100) : 10;
+  const defaultTargetAmount = baseline ? Math.round(baseline.raiseTarget) : 250;
+  const [targetMode, setTargetMode] = useState<"amount" | "percentage">("percentage");
+  const [targetPercentage, setTargetPercentage] = useState(defaultTargetPercentage);
+  const [targetAmount, setTargetAmount] = useState(defaultTargetAmount);
+
+  const activeTargetAmount = baseline
+    ? targetMode === "percentage"
+      ? Math.max(25, roundCurrency((baseline.discretionaryMonthlySpend * targetPercentage) / 100))
+      : Math.max(25, roundCurrency(targetAmount))
+    : 0;
+  const activeTargetPercentage = baseline
+    ? targetMode === "amount"
+      ? Math.max(1, Math.round((activeTargetAmount / baseline.discretionaryMonthlySpend) * 100))
+      : Math.max(1, targetPercentage)
+    : 0;
+  const retargetedLevers = baseline
+    ? analysis.topLevers.map((lever) => ({
+        ...lever,
+        targetCoverage: lever.estimatedHalfCutImpact / Math.max(activeTargetAmount, 1),
+      }))
+    : analysis.topLevers;
+  const primaryLever = retargetedLevers[0];
+  const secondaryLevers = retargetedLevers.slice(1, 4);
+  const totalRecoverable = retargetedLevers.reduce(
+    (total, lever) => total + lever.estimatedHalfCutImpact,
+    0,
+  );
+  const totalCoverage = activeTargetAmount
+    ? Math.min(1, totalRecoverable / activeTargetAmount)
+    : 0;
+  const actionCountToHitTarget = getActionCountToHitTarget(retargetedLevers, activeTargetAmount);
+  const targetPresets =
+    targetMode === "percentage"
+      ? [5, 10, 15]
+      : [0.5, 1, 1.5].map((multiplier) => roundCurrency(defaultTargetAmount * multiplier));
 
   return (
     <>
-      <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <article className="shell-panel space-y-5">
-          <div className="space-y-2">
-            <p className="eyebrow">Monthly baseline</p>
-            <h2 className="font-display text-4xl tracking-[-0.05em] text-[var(--foreground)] sm:text-5xl">
-              {baseline
-                ? formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency)
-                : "No discretionary baseline yet"}
-            </h2>
-            <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">
-              {baseline
-                ? `The model sees ${formatCurrency(baseline.raiseTarget, baseline.currency)} as the 10% raise target. This view compresses the analysis into the shortest path to that number.`
-                : "Link a session with behavioural spend in one primary currency to generate the brief."}
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <MetricCard label="Raise target" value={baseline ? formatCurrency(baseline.raiseTarget, baseline.currency) : "—"} />
-            <MetricCard label="Top-3 coverage" value={baseline ? formatPercent(leverCoverage) : "0%"} />
-            <MetricCard label="Filtered before ranking" value={formatPercent(filteredShare)} />
-          </div>
-
+      <section>
+        <article className="shell-panel brief-hero-panel">
           {primaryLever && baseline ? (
-            <article className="spotlight-card">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <p className="eyebrow">Best first lever</p>
-                  <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-                    {primaryLever.label}
-                  </h3>
-                  <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--muted)]">
-                    {formatCurrency(primaryLever.monthlySpend, baseline.currency)} per month in this category.
-                    A clean 50% cut gets back{" "}
-                    <span className="font-semibold text-[var(--foreground)]">
-                      {formatCurrency(primaryLever.estimatedHalfCutImpact, baseline.currency)}
-                    </span>
-                    .
-                  </p>
+            <>
+              <div className="brief-meta-row">
+                <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
+                  {source === "fixture" ? "Sample data" : "Live analysis"}
+                </span>
+                <span className="dashboard-inline-note">
+                  Baseline {formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency)} per month
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <p className="eyebrow">Monthly raise target</p>
+                <h2 className="font-display text-6xl tracking-[-0.07em] text-[var(--foreground)] sm:text-7xl">
+                  {formatCurrency(activeTargetAmount, baseline.currency)}
+                </h2>
+                <p className="max-w-2xl text-base leading-7 text-[var(--muted)]">
+                  Set to {activeTargetPercentage}% of discretionary spend. Three actions cover{" "}
+                  <span className="font-semibold text-[var(--foreground)]">{formatPercent(totalCoverage)}</span>
+                  {actionCountToHitTarget
+                    ? ` and it takes ${actionCountToHitTarget} actions to get there.`
+                    : "."}
+                </p>
+              </div>
+
+              <div className="brief-control-row">
+                <div className="target-mode-strip">
+                  <button
+                    className="target-mode-button"
+                    data-active={targetMode === "percentage"}
+                    onClick={() => setTargetMode("percentage")}
+                    type="button"
+                  >
+                    Percent
+                  </button>
+                  <button
+                    className="target-mode-button"
+                    data-active={targetMode === "amount"}
+                    onClick={() => setTargetMode("amount")}
+                    type="button"
+                  >
+                    Cash
+                  </button>
                 </div>
 
-                <div className="rounded-[1.25rem] bg-white/75 px-4 py-4 text-right ring-1 ring-black/5">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                    Target coverage
-                  </p>
-                  <p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                    {formatPercent(primaryLever.targetCoverage)}
-                  </p>
+                <label className="target-field">
+                  <div className="target-input-wrap">
+                    <span className="target-prefix">
+                      {targetMode === "percentage" ? "%" : baseline.currency}
+                    </span>
+                    <input
+                      aria-label={targetMode === "percentage" ? "Percent target" : "Cash target"}
+                      className="target-input"
+                      inputMode="decimal"
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value.replace(/[^\d.]/g, ""));
+
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+
+                        if (targetMode === "percentage") {
+                          setTargetPercentage(clamp(Math.round(parsed), 1, 50));
+                          return;
+                        }
+
+                        setTargetAmount(clamp(roundCurrency(parsed), 25, 5000));
+                      }}
+                      type="text"
+                      value={
+                        targetMode === "percentage"
+                          ? String(activeTargetPercentage)
+                          : String(activeTargetAmount)
+                      }
+                    />
+                  </div>
+                </label>
+
+                <div className="target-preset-row">
+                  {targetPresets.map((preset) => (
+                    <button
+                      key={preset}
+                      className="target-preset"
+                      data-active={
+                        targetMode === "percentage"
+                          ? preset === activeTargetPercentage
+                          : preset === activeTargetAmount
+                      }
+                      onClick={() => {
+                        if (targetMode === "percentage") {
+                          setTargetPercentage(preset);
+                          return;
+                        }
+
+                        setTargetAmount(preset);
+                      }}
+                      type="button"
+                    >
+                      {targetMode === "percentage"
+                        ? `${preset}%`
+                        : formatCurrency(preset, baseline.currency)}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {primaryLever.merchantExamples.length > 0 ? (
-                <p className="mt-4 text-sm text-[var(--muted)]">
-                  Examples: {primaryLever.merchantExamples.join(", ")}
-                </p>
-              ) : null}
-            </article>
-          ) : null}
-        </article>
-
-        <aside className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">What to audit first</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Three high-signal levers
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            {analysis.topLevers.length === 0 || !baseline ? (
-              <EmptyCopy>
-                No confident top levers yet. This usually means the latest bank feed is dominated by money
-                movement, fixed cost, or unresolved merchant noise.
-              </EmptyCopy>
-            ) : (
-              analysis.topLevers.slice(0, 3).map((lever, index) => (
-                <article key={lever.categoryKey} className="list-card">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                        {index === 0 ? "Start here" : `Lever ${index + 1}`}
-                      </p>
-                      <h4 className="mt-2 text-lg font-semibold text-[var(--foreground)]">{lever.label}</h4>
-                    </div>
-                    <span className="chip chip-quiet">{formatPercent(lever.targetCoverage)}</span>
+              <div className="brief-primary-action">
+                <div className="space-y-2">
+                  <p className="eyebrow">Start here</p>
+                  <div className="flex items-end justify-between gap-4">
+                    <h3 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+                      {primaryLever.label}
+                    </h3>
+                    <p className="action-amount action-amount-small">
+                      {formatCurrency(primaryLever.estimatedHalfCutImpact, baseline.currency)}
+                    </p>
                   </div>
-
-                  <div className="progress-track mt-4">
-                    <div className="progress-fill" style={{ width: `${Math.min(lever.targetCoverage * 100, 100)}%` }} />
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                    {formatCurrency(lever.monthlySpend, baseline.currency)} per month. Half-cut impact{" "}
-                    <span className="font-semibold text-[var(--foreground)]">
-                      {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
-                    </span>
-                    .
+                  <p className="text-sm leading-6 text-[var(--muted)]">
+                    {formatCurrency(primaryLever.monthlySpend, baseline.currency)} each month. Covers{" "}
+                    {formatPercent(primaryLever.targetCoverage)} of the target. Examples:{" "}
+                    {primaryLever.merchantExamples.join(", ")}.
                   </p>
-                </article>
-              ))
-            )}
-          </div>
-        </aside>
+                </div>
+              </div>
+            </>
+          ) : (
+            <EmptyCopy>
+              No confident top levers yet. This usually means the latest bank feed is dominated by money
+              movement, fixed cost, or unresolved merchant noise.
+            </EmptyCopy>
+          )}
+        </article>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Guardrails</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              What stays in the background
-            </h3>
-          </div>
+      <section className="brief-list-shell">
+        <div className="space-y-2">
+          <p className="eyebrow">Next best actions</p>
+          <p className="max-w-xl text-sm leading-6 text-[var(--muted)]">
+            Ranked by realistic recovery, not by trying to police every line item in the feed.
+          </p>
+        </div>
 
-          <div className="mt-5 grid gap-3">
+        <div className="brief-action-list">
+          {secondaryLevers.length === 0 || !baseline ? (
+            <EmptyCopy>
+              No confident follow-up levers yet. The current session is still too noisy.
+            </EmptyCopy>
+          ) : (
+            secondaryLevers.map((lever, index) => (
+              <article key={lever.categoryKey} className="brief-action-item">
+                <div className="brief-action-copy">
+                  <p className="brief-action-index">0{index + 2}</p>
+                  <div>
+                    <h4 className="text-xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
+                      {lever.label}
+                    </h4>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      {formatCurrency(lever.monthlySpend, baseline.currency)} each month. Examples:{" "}
+                      {lever.merchantExamples.join(", ")}.
+                    </p>
+                  </div>
+                </div>
+                <div className="brief-action-value">
+                  <p className="action-amount action-amount-small">
+                    {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
+                  </p>
+                  <p className="mt-1 text-sm text-[var(--muted)]">{formatPercent(lever.targetCoverage)}</p>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="shell-panel">
+        <details className="brief-details">
+          <summary className="brief-details-summary">
+            <span>How this brief works</span>
+            <span className="brief-details-meta">
+              {formatCurrency(baseline?.discretionaryMonthlySpend ?? 0, baseline?.currency ?? dominantCurrency)} baseline
+            </span>
+          </summary>
+
+          <div className="brief-details-body">
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              The dashboard only ranks discretionary behaviour in the dominant currency, excludes wealth flow
+              before advice, and keeps ambiguity visible instead of pretending uncertain merchants are precise.
+            </p>
+
+            <div className="brief-details-grid">
+              <div>
+                <p className="eyebrow">Filtered before ranking</p>
+                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+                  {formatPercent(filteredShare)}
+                </p>
+              </div>
+              <div>
+                <p className="eyebrow">Wealth flow excluded</p>
+                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+                  {analysis.debugCounts.wealthFlowTransactions}
+                </p>
+              </div>
+              <div>
+                <p className="eyebrow">Fixed cost excluded</p>
+                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+                  {analysis.debugCounts.fixedCostTransactions}
+                </p>
+              </div>
+              <div>
+                <p className="eyebrow">Ambiguous groups</p>
+                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+                  {analysis.uncertainSpend.length}
+                </p>
+              </div>
+            </div>
+
+            <CompactList
+              emptyMessage="No strong recurring patterns surfaced."
+              items={[...analysis.subscriptions.slice(0, 2), ...analysis.habitMerchants.slice(0, 2)].map((item) => ({
+                key: item.label,
+                label: item.label,
+                value: formatCurrency(item.monthlySpend, dominantCurrency),
+                detail: `${item.count} recurring hits`,
+              }))}
+              title="Recurring patterns that influenced the ranking."
+            />
+
             <CompactList
               emptyMessage="No fixed-cost context detected in the primary currency."
               items={analysis.fixedCostContext.slice(0, 4).map((item) => ({
@@ -589,66 +724,39 @@ function BriefVariant({
                 value: formatCurrency(item.monthlySpend, dominantCurrency),
                 detail: item.merchantExamples.join(", "),
               }))}
-              title="Fixed costs stay visible but do not get ranked."
-            />
-            <CompactList
-              emptyMessage="No strong subscription candidates yet."
-              items={analysis.subscriptions.slice(0, 4).map((item) => ({
-                key: item.label,
-                label: item.label,
-                value: formatCurrency(item.monthlySpend, dominantCurrency),
-                detail: `${item.count} recurring hits`,
-              }))}
-              title="Subscriptions are audit candidates, not automatic cuts."
+              title="Fixed costs stay visible as context but do not get ranked."
             />
           </div>
-        </article>
-
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Why this stays short</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              The brief is intentionally selective
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <MetricCard
-              label="Behavioural transactions"
-              value={String(analysis.debugCounts.behaviouralTransactions)}
-            />
-            <MetricCard
-              label="Wealth flow excluded"
-              value={String(analysis.debugCounts.wealthFlowTransactions)}
-            />
-            <MetricCard label="Fixed cost excluded" value={String(analysis.debugCounts.fixedCostTransactions)} />
-            <MetricCard
-              label="One-offs excluded"
-              value={String(analysis.debugCounts.excludedOneOffTransactions)}
-            />
-          </div>
-
-          <div className="mt-5 rounded-[1.25rem] bg-[var(--panel-soft)] px-4 py-4 ring-1 ring-[var(--line)]">
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              {analysis.uncertainSpend.length > 0
-                ? `Uncertain merchants are still shown separately (${analysis.uncertainSpend.length} groups) instead of being quietly folded into confident advice.`
-                : "No unresolved merchant groups are currently muddying the brief."}
-            </p>
-          </div>
-
-          {secondaryLevers.length > 0 ? (
-            <div className="mt-5 flex flex-wrap gap-2">
-              {secondaryLevers.map((lever) => (
-                <span key={lever.categoryKey} className="chip">
-                  {lever.label}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </article>
+        </details>
       </section>
     </>
   );
+}
+
+function getActionCountToHitTarget(levers: AnalysisLever[], targetAmount: number) {
+  if (!targetAmount) {
+    return 0;
+  }
+
+  let runningTotal = 0;
+
+  for (let index = 0; index < levers.length; index += 1) {
+    runningTotal += levers[index].estimatedHalfCutImpact;
+
+    if (runningTotal >= targetAmount) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value);
 }
 
 function DiagnosisVariant({

@@ -1,8 +1,13 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { cookies, headers } from "next/headers";
 
 import { AnalysisPanel } from "@/app/analysis-panel";
-import { hasEnableBankingConfig } from "@/lib/enable-banking/client";
+import { sampleSpendingAnalysisFixture } from "@/lib/analysis/fixtures";
+import {
+  ENABLE_BANKING_SESSION_COOKIE,
+  hasEnableBankingConfig,
+} from "@/lib/enable-banking/client";
 
 export type VariantKey = "brief" | "diagnosis" | "explorer";
 
@@ -11,23 +16,23 @@ export type PageSearchParams = Promise<{
   error?: string | string[];
 }>;
 
-type VariantMeta = {
-  href: string;
-  navigationLabel: string;
-};
-
-const VARIANT_META: Record<VariantKey, VariantMeta> = {
+const PAGE_META: Record<
+  VariantKey,
+  {
+    subtitle?: string;
+    title: string;
+  }
+> = {
   brief: {
-    href: "/",
-    navigationLabel: "Brief",
+    title: "Find a 10% raise in spending power without trying to cut the whole budget.",
   },
   diagnosis: {
-    href: "/diagnosis",
-    navigationLabel: "Diagnosis",
+    title: "Why these actions surfaced",
+    subtitle: "The logic, filters, and confidence behind the dashboard output.",
   },
   explorer: {
-    href: "/explorer",
-    navigationLabel: "Explorer",
+    title: "Inspect the supporting detail",
+    subtitle: "Recurring merchants, category context, and ambiguity that sits behind the brief.",
   },
 };
 
@@ -44,6 +49,15 @@ export async function VariantPage({
   const connected = firstValue(resolvedSearchParams.connected) === "1";
   const expectedOrigin = getExpectedOrigin();
   const callbackUrl = getCallbackUrl();
+  const headerStore = await headers();
+  const cookieStore = await cookies();
+  const currentHost =
+    headerStore.get("x-forwarded-host") ||
+    headerStore.get("host") ||
+    null;
+  const meta = PAGE_META[variant];
+  const hasSession = Boolean(cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value);
+  const shouldUseFixtureOnFirstPaint = isLocalHost(currentHost) && !hasSession;
   const connectActions = [
     {
       href: appHref(
@@ -64,13 +78,16 @@ export async function VariantPage({
   ];
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
       <section className="app-topbar">
         <div className="space-y-3">
           <p className="eyebrow">Give Yourself a Raise</p>
-          <h1 className="max-w-3xl text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)] sm:text-3xl">
-            Find a 10% raise in monthly spending power by cutting a few discretionary habits, not the whole budget.
+          <h1 className="max-w-2xl text-2xl font-semibold tracking-[-0.05em] text-[var(--foreground)] [text-wrap:balance] sm:text-3xl">
+            {meta.title}
           </h1>
+          {meta.subtitle ? (
+            <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">{meta.subtitle}</p>
+          ) : null}
 
           {callbackError ? <Callout tone="danger">{callbackError}</Callout> : null}
           {connected ? <Callout tone="success">Bank connection completed.</Callout> : null}
@@ -81,25 +98,13 @@ export async function VariantPage({
             </Callout>
           ) : null}
 
-          <nav aria-label="Analysis views" className="app-tab-strip">
-            {(Object.entries(VARIANT_META) as Array<[VariantKey, VariantMeta]>).map(([key, item]) => (
-              <Link
-                key={key}
-                aria-current={key === variant ? "page" : undefined}
-                className="variant-link"
-                data-active={key === variant}
-                href={item.href}
-              >
-                {item.navigationLabel}
+          {variant !== "brief" ? (
+            <div>
+              <Link className="text-sm font-semibold text-[var(--muted)] underline decoration-[var(--line-strong)] underline-offset-4" href="/">
+                Back to dashboard
               </Link>
-            ))}
-          </nav>
-
-          <div className="flex flex-wrap gap-2 text-sm text-[var(--muted)]">
-            <span className="chip chip-quiet">Action-focused</span>
-            <span className="chip chip-quiet">Conservative ranking</span>
-            <span className="chip chip-quiet">Inspectability preserved</span>
-          </div>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -108,15 +113,11 @@ export async function VariantPage({
         connectActions={connectActions}
         debugHref="/debug"
         expectedOrigin={expectedOrigin}
+        initialAnalysis={shouldUseFixtureOnFirstPaint ? sampleSpendingAnalysisFixture : null}
+        initialSource={shouldUseFixtureOnFirstPaint ? "fixture" : null}
         showDiagnostics={false}
         variant={variant}
       />
-
-      <div className="flex justify-end">
-        <Link className="text-sm font-semibold text-[var(--muted)] underline decoration-[var(--line-strong)] underline-offset-4" href="/debug">
-          Open debug tools
-        </Link>
-      </div>
     </main>
   );
 }
@@ -188,4 +189,12 @@ function appHref(expectedOrigin: string | null, path: string) {
   }
 
   return new URL(path, expectedOrigin).toString();
+}
+
+function isLocalHost(host: string | null) {
+  if (!host) {
+    return false;
+  }
+
+  return host.startsWith("localhost:") || host.startsWith("127.0.0.1:") || host === "[::1]";
 }
