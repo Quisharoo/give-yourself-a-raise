@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import {
   ENABLE_BANKING_STATE_COOKIE,

@@ -70,10 +70,20 @@ a {
     0 20px 50px rgba(71, 88, 97, 0.06);
 }
 
+.app-topbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
 .hero-panel {
   position: relative;
   overflow: hidden;
   padding: 1.5rem;
+}
+
+.app-hero-panel {
+  padding-block: 1.35rem;
 }
 
 .hero-panel::after {
@@ -174,11 +184,18 @@ a {
   color: color-mix(in oklab, var(--danger) 72%, black);
 }
 
+.app-tab-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
 .variant-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
+  min-height: 2.9rem;
   border: 1px solid var(--line);
   padding: 0.72rem 1rem;
   font-size: 0.9rem;
@@ -207,6 +224,7 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 2.9rem;
   border-radius: 999px;
   padding: 0.78rem 1.05rem;
   font-size: 0.92rem;
@@ -244,6 +262,11 @@ a {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.button-compact {
+  align-self: flex-start;
+  padding-inline: 0.95rem;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -257,6 +280,10 @@ a {
   background: rgba(255, 255, 255, 0.82);
   color: var(--foreground);
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+.app-status-panel {
+  padding-block: 1rem;
 }
 
 .chip-quiet {
@@ -292,11 +319,26 @@ a {
 }
 
 @media (min-width: 640px) {
+  .app-topbar {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+
   .shell-panel {
     padding: 1.5rem;
   }
 
   .hero-panel {
     padding: 1.8rem;
+  }
+
+  .app-tab-strip {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .button-compact {
+    align-self: auto;
   }
 }

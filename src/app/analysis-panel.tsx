@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
@@ -37,23 +38,35 @@ type RecurringRow = {
 
 export function AnalysisPanel({
   callbackUrl,
+  connectActions,
+  debugHref,
   expectedOrigin,
+  showDiagnostics,
   variant,
 }: {
   callbackUrl: string | null;
+  connectActions: Array<{
+    href: string;
+    label: string;
+    tone: "primary" | "secondary";
+  }>;
+  debugHref: string;
   expectedOrigin: string | null;
+  showDiagnostics: boolean;
   variant: VariantKey;
 }) {
   const [state, setState] = useState<AnalysisState>({ status: "loading" });
-  const [browserOrigin, setBrowserOrigin] = useState<string | null>(null);
-  const shouldUseFixtureFallback = process.env.NODE_ENV !== "production";
-
-  useEffect(() => {
-    setBrowserOrigin(window.location.origin);
-  }, []);
+  const [browserOrigin] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : window.location.origin,
+  );
+  const [browserHostname] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : window.location.hostname,
+  );
 
   useEffect(() => {
     let cancelled = false;
+    const shouldUseFixtureFallback =
+      process.env.NODE_ENV !== "production" || isLocalDevelopmentHost(browserHostname);
 
     async function loadAnalysis() {
       try {
@@ -118,12 +131,38 @@ export function AnalysisPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [browserHostname]);
 
   const originMismatch =
-    Boolean(expectedOrigin) && Boolean(browserOrigin) && expectedOrigin !== browserOrigin;
+    showDiagnostics &&
+    Boolean(expectedOrigin) &&
+    Boolean(browserOrigin) &&
+    expectedOrigin !== browserOrigin;
 
   if (state.status === "loading") {
+    if (!showDiagnostics) {
+      return (
+        <section className="shell-panel space-y-4">
+          <div className="space-y-2">
+            <p className="eyebrow">Preparing analysis</p>
+            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+              Pulling the latest spending picture
+            </h2>
+            <p className="text-sm leading-6 text-[var(--muted)]">
+              Separating discretionary behaviour from wealth flow and fixed cost so the recommendation
+              can stay narrow.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <span className="chip chip-quiet">Checking session</span>
+            <span className="chip chip-quiet">Building categories</span>
+            <span className="chip chip-quiet">Ranking levers</span>
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="grid gap-4">
         <MetricGrid
@@ -150,6 +189,35 @@ export function AnalysisPanel({
   }
 
   if (state.status === "missing") {
+    if (!showDiagnostics) {
+      return (
+        <section className="shell-panel space-y-5">
+          <div className="space-y-2">
+            <p className="eyebrow">Connect account</p>
+            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+              Start with a live bank feed
+            </h2>
+            <p className="text-sm leading-6 text-[var(--muted)]">{state.message}</p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            {connectActions.map((action) => (
+              <a
+                key={action.label}
+                className={action.tone === "primary" ? "button button-primary" : "button button-secondary"}
+                href={action.href}
+              >
+                {action.label}
+              </a>
+            ))}
+            <Link className="button button-secondary" href={debugHref}>
+              Open debug tools
+            </Link>
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="grid gap-4">
         <MetricGrid
@@ -173,6 +241,35 @@ export function AnalysisPanel({
   }
 
   if (state.status === "error") {
+    if (!showDiagnostics) {
+      return (
+        <section className="shell-panel space-y-5">
+          <div className="space-y-2">
+            <p className="eyebrow">Analysis unavailable</p>
+            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
+              The spending model could not load
+            </h2>
+            <p className="text-sm leading-6 text-[var(--muted)]">{state.message}</p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Link className="button button-primary" href={debugHref}>
+              Open debug tools
+            </Link>
+            {connectActions.map((action) => (
+              <a
+                key={action.label}
+                className="button button-secondary"
+                href={action.href}
+              >
+                {action.label}
+              </a>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="grid gap-4">
         <MetricGrid
@@ -199,9 +296,23 @@ export function AnalysisPanel({
       browserOrigin={browserOrigin}
       expectedOrigin={expectedOrigin}
       originMismatch={originMismatch}
+      showDiagnostics={showDiagnostics}
       source={state.source}
       variant={variant}
     />
+  );
+}
+
+function isLocalDevelopmentHost(hostname: string | null) {
+  if (!hostname) {
+    return false;
+  }
+
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname.endsWith(".local")
   );
 }
 
@@ -211,6 +322,7 @@ function ReadyAnalysis({
   browserOrigin,
   expectedOrigin,
   originMismatch,
+  showDiagnostics,
   source,
   variant,
 }: {
@@ -219,6 +331,7 @@ function ReadyAnalysis({
   browserOrigin: string | null;
   expectedOrigin: string | null;
   originMismatch: boolean;
+  showDiagnostics: boolean;
   source: "fixture" | "live";
   variant: VariantKey;
 }) {
@@ -263,20 +376,44 @@ function ReadyAnalysis({
 
   return (
     <section className="grid gap-4">
-      <MetricGrid metrics={metrics} />
-      <NoticeBlock callbackUrl={callbackUrl} browserOrigin={browserOrigin} expectedOrigin={expectedOrigin} originMismatch={originMismatch} />
-
-      {source === "fixture" ? (
+      {showDiagnostics ? <MetricGrid metrics={metrics} /> : null}
+      {showDiagnostics ? (
+        <NoticeBlock
+          callbackUrl={callbackUrl}
+          browserOrigin={browserOrigin}
+          expectedOrigin={expectedOrigin}
+          originMismatch={originMismatch}
+        />
+      ) : null}
+      {showDiagnostics && source === "fixture" ? (
         <section className="callout callout-neutral">
           <span className="font-semibold text-[var(--foreground)]">Sample analysis fixture:</span>{" "}
           using a synthetic, sanitized payload in local development because no live session was available.
         </section>
       ) : null}
-
-      {analysis.currencySummary.otherCurrencies.length > 0 ? (
+      {showDiagnostics && analysis.currencySummary.otherCurrencies.length > 0 ? (
         <section className="callout callout-neutral">
           <span className="font-semibold text-[var(--foreground)]">Other currencies detected:</span>{" "}
           {analysis.currencySummary.otherCurrencies.join(", ")}
+        </section>
+      ) : null}
+      {!showDiagnostics ? (
+        <section className="shell-panel app-status-panel">
+          <div className="flex flex-wrap gap-2">
+            <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
+              {source === "fixture" ? "Sample data" : "Live session"}
+            </span>
+            <span className="chip chip-quiet">{analysis.accountCount} accounts</span>
+            <span className="chip chip-quiet">
+              {analysis.currencySummary.primaryCurrency ?? dominantCurrency}
+            </span>
+            <span className="chip chip-quiet">{formatGeneratedAt(analysis.generatedAt)}</span>
+            {analysis.currencySummary.otherCurrencies.length > 0 ? (
+              <span className="chip chip-quiet">
+                {analysis.currencySummary.otherCurrencies.join(", ")} side-feed
+              </span>
+            ) : null}
+          </div>
         </section>
       ) : null}
 
