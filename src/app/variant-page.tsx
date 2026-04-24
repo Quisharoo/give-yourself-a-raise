@@ -24,7 +24,7 @@ const PAGE_META: Record<
   }
 > = {
   brief: {
-    title: "Find a 10% raise in spending power without trying to cut the whole budget.",
+    title: "Your raise brief",
   },
   diagnosis: {
     title: "Why these actions surfaced",
@@ -78,16 +78,31 @@ export async function VariantPage({
   ];
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
-      <section className="app-topbar">
+    <main
+      className={
+        variant === "brief"
+          ? "mobile-app-shell mx-auto flex w-full max-w-5xl flex-1 flex-col gap-3 px-4 py-4 sm:px-6 sm:py-6 lg:px-8"
+          : "mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-8"
+      }
+    >
+      <section className={variant === "brief" ? "app-topbar app-topbar-brief" : "app-topbar"}>
         <div className="space-y-3">
-          <p className="eyebrow">Give Yourself a Raise</p>
-          <h1 className="max-w-2xl text-2xl font-semibold tracking-[-0.05em] text-[var(--foreground)] [text-wrap:balance] sm:text-3xl">
-            {meta.title}
-          </h1>
-          {meta.subtitle ? (
-            <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">{meta.subtitle}</p>
-          ) : null}
+          {variant === "brief" ? (
+            <div className="mobile-brand-row">
+              <p className="eyebrow">Give Yourself a Raise</p>
+              <span className="mobile-brand-status">Brief</span>
+            </div>
+          ) : (
+            <>
+              <p className="eyebrow">Give Yourself a Raise</p>
+              <h1 className="max-w-2xl text-2xl font-semibold tracking-[-0.05em] text-[var(--foreground)] [text-wrap:balance] sm:text-3xl">
+                {meta.title}
+              </h1>
+              {meta.subtitle ? (
+                <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">{meta.subtitle}</p>
+              ) : null}
+            </>
+          )}
 
           {callbackError ? <Callout tone="danger">{callbackError}</Callout> : null}
           {connected ? <Callout tone="success">Bank connection completed.</Callout> : null}

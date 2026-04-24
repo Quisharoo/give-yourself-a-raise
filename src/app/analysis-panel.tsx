@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   AnalysisLever,
@@ -453,6 +453,8 @@ function BriefVariant({
   const [targetMode, setTargetMode] = useState<"amount" | "percentage">("percentage");
   const [targetPercentage, setTargetPercentage] = useState(defaultTargetPercentage);
   const [targetAmount, setTargetAmount] = useState(defaultTargetAmount);
+  const [activeLeverIndex, setActiveLeverIndex] = useState(0);
+  const actionCardRefs = useRef<Array<HTMLElement | null>>([]);
 
   const activeTargetAmount = baseline
     ? targetMode === "percentage"
@@ -471,7 +473,6 @@ function BriefVariant({
       }))
     : analysis.topLevers;
   const primaryLever = retargetedLevers[0];
-  const secondaryLevers = retargetedLevers.slice(1, 4);
   const totalRecoverable = retargetedLevers.reduce(
     (total, lever) => total + lever.estimatedHalfCutImpact,
     0,
@@ -480,16 +481,27 @@ function BriefVariant({
     ? Math.min(1, totalRecoverable / activeTargetAmount)
     : 0;
   const actionCountToHitTarget = getActionCountToHitTarget(retargetedLevers, activeTargetAmount);
+  const actionLevers = retargetedLevers.slice(0, 4);
+  const activeLever = actionLevers[activeLeverIndex] ?? actionLevers[0];
   const targetPresets =
     targetMode === "percentage"
       ? [5, 10, 15]
       : [0.5, 1, 1.5].map((multiplier) => roundCurrency(defaultTargetAmount * multiplier));
 
+  const selectLever = (index: number) => {
+    setActiveLeverIndex(index);
+    actionCardRefs.current[index]?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  };
+
   return (
     <>
-      <section>
+      <section className="brief-mobile-stack">
         <article className="shell-panel brief-hero-panel">
-          {primaryLever && baseline ? (
+          {primaryLever && baseline && activeLever ? (
             <>
               <div className="brief-meta-row">
                 <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
@@ -500,17 +512,16 @@ function BriefVariant({
                 </span>
               </div>
 
-              <div className="space-y-3">
-                <p className="eyebrow">Monthly raise target</p>
-                <h2 className="font-display text-6xl tracking-[-0.07em] text-[var(--foreground)] sm:text-7xl">
-                  {formatCurrency(activeTargetAmount, baseline.currency)}
-                </h2>
-                <p className="max-w-2xl text-base leading-7 text-[var(--muted)]">
-                  Set to {activeTargetPercentage}% of discretionary spend. Three actions cover{" "}
-                  <span className="font-semibold text-[var(--foreground)]">{formatPercent(totalCoverage)}</span>
+              <div className="brief-amount-block">
+                <p className="eyebrow">Monthly target</p>
+                <div className="brief-amount-row">
+                  <h2 className="brief-target-amount">{formatCurrency(activeTargetAmount, baseline.currency)}</h2>
+                  <span className="brief-target-percent">{activeTargetPercentage}%</span>
+                </div>
+                <p className="brief-signal-copy">
                   {actionCountToHitTarget
-                    ? ` and it takes ${actionCountToHitTarget} actions to get there.`
-                    : "."}
+                    ? `${actionCountToHitTarget} actions can cover ${formatPercent(totalCoverage)}.`
+                    : `Top actions cover ${formatPercent(totalCoverage)}.`}
                 </p>
               </div>
 
@@ -595,24 +606,6 @@ function BriefVariant({
                 </div>
               </div>
 
-              <div className="brief-primary-action">
-                <div className="space-y-2">
-                  <p className="eyebrow">Start here</p>
-                  <div className="flex items-end justify-between gap-4">
-                    <h3 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                      {primaryLever.label}
-                    </h3>
-                    <p className="action-amount action-amount-small">
-                      {formatCurrency(primaryLever.estimatedHalfCutImpact, baseline.currency)}
-                    </p>
-                  </div>
-                  <p className="text-sm leading-6 text-[var(--muted)]">
-                    {formatCurrency(primaryLever.monthlySpend, baseline.currency)} each month. Covers{" "}
-                    {formatPercent(primaryLever.targetCoverage)} of the target. Examples:{" "}
-                    {primaryLever.merchantExamples.join(", ")}.
-                  </p>
-                </div>
-              </div>
             </>
           ) : (
             <EmptyCopy>
@@ -623,47 +616,101 @@ function BriefVariant({
         </article>
       </section>
 
-      <section className="brief-list-shell">
-        <div className="space-y-2">
-          <p className="eyebrow">Next best actions</p>
-          <p className="max-w-xl text-sm leading-6 text-[var(--muted)]">
-            Ranked by realistic recovery, not by trying to police every line item in the feed.
-          </p>
+      <section className="brief-action-zone">
+        <div className="brief-section-heading">
+          <div>
+            <p className="eyebrow">Swipe actions</p>
+            <h3 className="brief-section-title">{activeLever?.label ?? "Next action"}</h3>
+          </div>
+          {activeLever && baseline ? (
+            <p className="brief-section-value">
+              {formatCurrency(activeLever.estimatedHalfCutImpact, baseline.currency)}
+            </p>
+          ) : null}
         </div>
 
-        <div className="brief-action-list">
-          {secondaryLevers.length === 0 || !baseline ? (
-            <EmptyCopy>
-              No confident follow-up levers yet. The current session is still too noisy.
-            </EmptyCopy>
-          ) : (
-            secondaryLevers.map((lever, index) => (
-              <article key={lever.categoryKey} className="brief-action-item">
-                <div className="brief-action-copy">
-                  <p className="brief-action-index">0{index + 2}</p>
+        {actionLevers.length === 0 || !baseline ? (
+          <section className="shell-panel">
+            <EmptyCopy>No confident follow-up levers yet. The current session is still too noisy.</EmptyCopy>
+          </section>
+        ) : (
+          <>
+            <div
+              aria-label="Spending actions"
+              className="brief-swipe-track"
+              onScroll={(event) => {
+                const cards = Array.from(event.currentTarget.children) as HTMLElement[];
+                const nearestIndex = cards.reduce(
+                  (nearest, card, index) => {
+                    const distance = Math.abs(card.offsetLeft - event.currentTarget.scrollLeft);
+                    return distance < nearest.distance ? { distance, index } : nearest;
+                  },
+                  { distance: Number.POSITIVE_INFINITY, index: 0 },
+                ).index;
+
+                setActiveLeverIndex(nearestIndex);
+              }}
+            >
+              {actionLevers.map((lever, index) => (
+                <article
+                  key={lever.categoryKey}
+                  ref={(node) => {
+                    actionCardRefs.current[index] = node;
+                  }}
+                  className="brief-swipe-card"
+                  data-active={index === activeLeverIndex}
+                >
+                  <div className="brief-card-topline">
+                    <span className="brief-action-index">0{index + 1}</span>
+                    <span className={`chip ${confidenceChipClass(lever.confidence)}`}>
+                      {formatConfidence(lever.confidence)}
+                    </span>
+                  </div>
+
                   <div>
-                    <h4 className="text-xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-                      {lever.label}
-                    </h4>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      {formatCurrency(lever.monthlySpend, baseline.currency)} each month. Examples:{" "}
-                      {lever.merchantExamples.join(", ")}.
+                    <h4 className="brief-card-title">{lever.label}</h4>
+                    <p className="brief-card-copy">
+                      Cut half of {formatCurrency(lever.monthlySpend, baseline.currency)} monthly.
                     </p>
                   </div>
-                </div>
-                <div className="brief-action-value">
-                  <p className="action-amount action-amount-small">
-                    {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
-                  </p>
-                  <p className="mt-1 text-sm text-[var(--muted)]">{formatPercent(lever.targetCoverage)}</p>
-                </div>
-              </article>
-            ))
-          )}
-        </div>
+
+                  <div className="brief-card-metrics">
+                    <div>
+                      <p className="brief-card-label">Potential</p>
+                      <p className="brief-card-amount">
+                        {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="brief-card-label">Target</p>
+                      <p className="brief-card-percent">{formatPercent(lever.targetCoverage)}</p>
+                    </div>
+                  </div>
+
+                  {lever.merchantExamples.length > 0 ? (
+                    <p className="brief-card-examples">{lever.merchantExamples.slice(0, 3).join(" / ")}</p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+
+            <div className="brief-swipe-dots" aria-label="Select action">
+              {actionLevers.map((lever, index) => (
+                <button
+                  key={lever.categoryKey}
+                  aria-label={`Show ${lever.label}`}
+                  className="brief-swipe-dot"
+                  data-active={index === activeLeverIndex}
+                  onClick={() => selectLever(index)}
+                  type="button"
+                />
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
-      <section className="shell-panel">
+      <section className="shell-panel brief-details-panel">
         <details className="brief-details">
           <summary className="brief-details-summary">
             <span>How this brief works</span>
