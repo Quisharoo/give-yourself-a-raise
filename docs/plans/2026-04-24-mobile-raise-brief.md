@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Redesign the brief route into a production mobile-first raise brief with swipeable action cards.
+**Goal:** Redesign the brief route into a production mobile-first raise brief with one target and impact bubbles.
 
-**Architecture:** Keep the existing Next App Router structure and analysis data contract. Replace only the brief presentation layer inside the current client component, backed by native scroll-snap interaction and global CSS tokens.
+**Architecture:** Keep the existing Next App Router structure and analysis data contract. Replace only the brief presentation layer inside the current client component, backed by local state and global CSS tokens.
 
-**Tech Stack:** Next 16 App Router, React 19 client component state, Tailwind v4 global CSS, native CSS scroll snap.
+**Tech Stack:** Next 16 App Router, React 19 client component state, Tailwind v4 global CSS, native buttons.
 
 ---
 
@@ -31,14 +31,14 @@
 
 **Steps:**
 - Add local `activeLeverIndex` state.
-- Build `actionLevers` from the primary and secondary levers.
-- Replace the vertical "start here" plus "next best actions" report with a target panel and swipeable action carousel.
-- Keep the target mode and amount controls.
+- Build `actionLevers` from the strongest levers.
+- Replace the vertical "start here" plus "next best actions" report with a target panel and impact bubbles.
+- Keep only simple percentage target presets.
 - Keep details in the existing disclosure.
 
 **Verification:**
 - Run `npm run typecheck`.
-- Load `/` at 390px and confirm the action cards swipe.
+- Load `/` at 390px and confirm the first viewport shows target plus spending bubbles.
 
 ### Task 3: Add Mobile-First Styling
 
@@ -46,7 +46,7 @@
 - Modify: `src/app/globals.css`
 
 **Steps:**
-- Add compact app shell, target panel, swipe carousel, dot indicators, and touch-safe button styles.
+- Add compact app shell, target panel, impact-bubble field, active signal hint, and touch-safe button styles.
 - Use `100dvh`-safe layout constraints.
 - Respect `prefers-reduced-motion`.
 - Avoid animating layout properties.

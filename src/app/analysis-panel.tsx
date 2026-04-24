@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   AnalysisLever,
@@ -449,23 +450,13 @@ function BriefVariant({
   source: "fixture" | "live";
 }) {
   const defaultTargetPercentage = baseline ? Math.round(baseline.targetPercentage * 100) : 10;
-  const defaultTargetAmount = baseline ? Math.round(baseline.raiseTarget) : 250;
-  const [targetMode, setTargetMode] = useState<"amount" | "percentage">("percentage");
   const [targetPercentage, setTargetPercentage] = useState(defaultTargetPercentage);
-  const [targetAmount, setTargetAmount] = useState(defaultTargetAmount);
   const [activeLeverIndex, setActiveLeverIndex] = useState(0);
-  const actionCardRefs = useRef<Array<HTMLElement | null>>([]);
 
   const activeTargetAmount = baseline
-    ? targetMode === "percentage"
-      ? Math.max(25, roundCurrency((baseline.discretionaryMonthlySpend * targetPercentage) / 100))
-      : Math.max(25, roundCurrency(targetAmount))
+    ? Math.max(25, roundCurrency((baseline.discretionaryMonthlySpend * targetPercentage) / 100))
     : 0;
-  const activeTargetPercentage = baseline
-    ? targetMode === "amount"
-      ? Math.max(1, Math.round((activeTargetAmount / baseline.discretionaryMonthlySpend) * 100))
-      : Math.max(1, targetPercentage)
-    : 0;
+  const activeTargetPercentage = baseline ? Math.max(1, targetPercentage) : 0;
   const retargetedLevers = baseline
     ? analysis.topLevers.map((lever) => ({
         ...lever,
@@ -473,6 +464,12 @@ function BriefVariant({
       }))
     : analysis.topLevers;
   const primaryLever = retargetedLevers[0];
+  const actionLevers = retargetedLevers.slice(0, 4);
+  const activeLever = actionLevers[activeLeverIndex] ?? actionLevers[0];
+  const strongestImpact = Math.max(
+    ...actionLevers.map((lever) => lever.estimatedHalfCutImpact),
+    1,
+  );
   const totalRecoverable = retargetedLevers.reduce(
     (total, lever) => total + lever.estimatedHalfCutImpact,
     0,
@@ -480,132 +477,47 @@ function BriefVariant({
   const totalCoverage = activeTargetAmount
     ? Math.min(1, totalRecoverable / activeTargetAmount)
     : 0;
-  const actionCountToHitTarget = getActionCountToHitTarget(retargetedLevers, activeTargetAmount);
-  const actionLevers = retargetedLevers.slice(0, 4);
-  const activeLever = actionLevers[activeLeverIndex] ?? actionLevers[0];
-  const targetPresets =
-    targetMode === "percentage"
-      ? [5, 10, 15]
-      : [0.5, 1, 1.5].map((multiplier) => roundCurrency(defaultTargetAmount * multiplier));
-
-  const selectLever = (index: number) => {
-    setActiveLeverIndex(index);
-    actionCardRefs.current[index]?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-      inline: "center",
-    });
-  };
+  const targetPresets = [5, 10, 15];
 
   return (
     <>
       <section className="brief-mobile-stack">
-        <article className="shell-panel brief-hero-panel">
+        <article className="shell-panel brief-hero-panel brief-focus-panel">
           {primaryLever && baseline && activeLever ? (
             <>
-              <div className="brief-meta-row">
+              <div className="brief-focus-meta">
                 <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
-                  {source === "fixture" ? "Sample data" : "Live analysis"}
+                  {source === "fixture" ? "Sample" : "Live"}
                 </span>
                 <span className="dashboard-inline-note">
-                  Baseline {formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency)} per month
+                  {formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency)} monthly spend
                 </span>
               </div>
 
-              <div className="brief-amount-block">
-                <p className="eyebrow">Monthly target</p>
-                <div className="brief-amount-row">
+              <div className="brief-target-core">
+                <p className="eyebrow">Target</p>
+                <div className="brief-target-row">
                   <h2 className="brief-target-amount">{formatCurrency(activeTargetAmount, baseline.currency)}</h2>
                   <span className="brief-target-percent">{activeTargetPercentage}%</span>
                 </div>
                 <p className="brief-signal-copy">
-                  {actionCountToHitTarget
-                    ? `${actionCountToHitTarget} actions can cover ${formatPercent(totalCoverage)}.`
-                    : `Top actions cover ${formatPercent(totalCoverage)}.`}
+                  {formatPercent(totalCoverage)} covered by current signals.
                 </p>
               </div>
 
-              <div className="brief-control-row">
-                <div className="target-mode-strip">
+              <div className="brief-target-presets" aria-label="Target percentage">
+                {targetPresets.map((preset) => (
                   <button
-                    className="target-mode-button"
-                    data-active={targetMode === "percentage"}
-                    onClick={() => setTargetMode("percentage")}
+                    key={preset}
+                    className="target-preset"
+                    data-active={preset === activeTargetPercentage}
+                    onClick={() => setTargetPercentage(preset)}
                     type="button"
                   >
-                    Percent
+                    {preset}%
                   </button>
-                  <button
-                    className="target-mode-button"
-                    data-active={targetMode === "amount"}
-                    onClick={() => setTargetMode("amount")}
-                    type="button"
-                  >
-                    Cash
-                  </button>
-                </div>
-
-                <label className="target-field">
-                  <div className="target-input-wrap">
-                    <span className="target-prefix">
-                      {targetMode === "percentage" ? "%" : baseline.currency}
-                    </span>
-                    <input
-                      aria-label={targetMode === "percentage" ? "Percent target" : "Cash target"}
-                      className="target-input"
-                      inputMode="decimal"
-                      onChange={(event) => {
-                        const parsed = Number(event.target.value.replace(/[^\d.]/g, ""));
-
-                        if (!Number.isFinite(parsed)) {
-                          return;
-                        }
-
-                        if (targetMode === "percentage") {
-                          setTargetPercentage(clamp(Math.round(parsed), 1, 50));
-                          return;
-                        }
-
-                        setTargetAmount(clamp(roundCurrency(parsed), 25, 5000));
-                      }}
-                      type="text"
-                      value={
-                        targetMode === "percentage"
-                          ? String(activeTargetPercentage)
-                          : String(activeTargetAmount)
-                      }
-                    />
-                  </div>
-                </label>
-
-                <div className="target-preset-row">
-                  {targetPresets.map((preset) => (
-                    <button
-                      key={preset}
-                      className="target-preset"
-                      data-active={
-                        targetMode === "percentage"
-                          ? preset === activeTargetPercentage
-                          : preset === activeTargetAmount
-                      }
-                      onClick={() => {
-                        if (targetMode === "percentage") {
-                          setTargetPercentage(preset);
-                          return;
-                        }
-
-                        setTargetAmount(preset);
-                      }}
-                      type="button"
-                    >
-                      {targetMode === "percentage"
-                        ? `${preset}%`
-                        : formatCurrency(preset, baseline.currency)}
-                    </button>
-                  ))}
-                </div>
+                ))}
               </div>
-
             </>
           ) : (
             <EmptyCopy>
@@ -616,11 +528,11 @@ function BriefVariant({
         </article>
       </section>
 
-      <section className="brief-action-zone">
-        <div className="brief-section-heading">
+      <section className="brief-bubble-zone">
+        <div className="brief-section-heading brief-bubble-heading">
           <div>
-            <p className="eyebrow">Swipe actions</p>
-            <h3 className="brief-section-title">{activeLever?.label ?? "Next action"}</h3>
+            <p className="eyebrow">Signals</p>
+            <h3 className="brief-section-title">{activeLever?.label ?? "Spending"}</h3>
           </div>
           {activeLever && baseline ? (
             <p className="brief-section-value">
@@ -635,77 +547,35 @@ function BriefVariant({
           </section>
         ) : (
           <>
-            <div
-              aria-label="Spending actions"
-              className="brief-swipe-track"
-              onScroll={(event) => {
-                const cards = Array.from(event.currentTarget.children) as HTMLElement[];
-                const nearestIndex = cards.reduce(
-                  (nearest, card, index) => {
-                    const distance = Math.abs(card.offsetLeft - event.currentTarget.scrollLeft);
-                    return distance < nearest.distance ? { distance, index } : nearest;
-                  },
-                  { distance: Number.POSITIVE_INFINITY, index: 0 },
-                ).index;
-
-                setActiveLeverIndex(nearestIndex);
-              }}
-            >
-              {actionLevers.map((lever, index) => (
-                <article
-                  key={lever.categoryKey}
-                  ref={(node) => {
-                    actionCardRefs.current[index] = node;
-                  }}
-                  className="brief-swipe-card"
-                  data-active={index === activeLeverIndex}
-                >
-                  <div className="brief-card-topline">
-                    <span className="brief-action-index">0{index + 1}</span>
-                    <span className={`chip ${confidenceChipClass(lever.confidence)}`}>
-                      {formatConfidence(lever.confidence)}
-                    </span>
-                  </div>
-
-                  <div>
-                    <h4 className="brief-card-title">{lever.label}</h4>
-                    <p className="brief-card-copy">
-                      Cut half of {formatCurrency(lever.monthlySpend, baseline.currency)} monthly.
-                    </p>
-                  </div>
-
-                  <div className="brief-card-metrics">
-                    <div>
-                      <p className="brief-card-label">Potential</p>
-                      <p className="brief-card-amount">
-                        {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="brief-card-label">Target</p>
-                      <p className="brief-card-percent">{formatPercent(lever.targetCoverage)}</p>
-                    </div>
-                  </div>
-
-                  {lever.merchantExamples.length > 0 ? (
-                    <p className="brief-card-examples">{lever.merchantExamples.slice(0, 3).join(" / ")}</p>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-
-            <div className="brief-swipe-dots" aria-label="Select action">
+            <div aria-label="Spending signals" className="brief-bubble-field">
               {actionLevers.map((lever, index) => (
                 <button
                   key={lever.categoryKey}
-                  aria-label={`Show ${lever.label}`}
-                  className="brief-swipe-dot"
+                  className="brief-impact-bubble"
                   data-active={index === activeLeverIndex}
-                  onClick={() => selectLever(index)}
+                  onClick={() => setActiveLeverIndex(index)}
+                  style={
+                    {
+                      "--bubble-fill": `${Math.min(100, Math.round(lever.targetCoverage * 100))}%`,
+                      "--bubble-size": `${7.8 + (lever.estimatedHalfCutImpact / strongestImpact) * 3.4}rem`,
+                    } as CSSProperties
+                  }
                   type="button"
-                />
+                >
+                  <span className="brief-bubble-label">{lever.label}</span>
+                  <span className="brief-bubble-value">
+                    {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
+                  </span>
+                  <span className="brief-bubble-percent">{formatPercent(lever.targetCoverage)}</span>
+                </button>
               ))}
             </div>
+
+            {activeLever ? (
+              <p className="brief-active-hint">
+                {activeLever.merchantExamples.slice(0, 3).join(" / ")}
+              </p>
+            ) : null}
           </>
         )}
       </section>
@@ -778,28 +648,6 @@ function BriefVariant({
       </section>
     </>
   );
-}
-
-function getActionCountToHitTarget(levers: AnalysisLever[], targetAmount: number) {
-  if (!targetAmount) {
-    return 0;
-  }
-
-  let runningTotal = 0;
-
-  for (let index = 0; index < levers.length; index += 1) {
-    runningTotal += levers[index].estimatedHalfCutImpact;
-
-    if (runningTotal >= targetAmount) {
-      return index + 1;
-    }
-  }
-
-  return 0;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
 }
 
 function roundCurrency(value: number) {
