@@ -1,33 +1,20 @@
 "use client";
 
-import Link from "next/link";
-import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import type {
-  AnalysisLever,
-  FixedCostItem,
-  HabitMerchant,
-  SpendingAnalysis,
-  SubscriptionAuditItem,
-  UncertainSpendItem,
-} from "@/lib/analysis/types";
 import { sampleSpendingAnalysisFixture } from "@/lib/analysis/fixtures";
-import type { VariantKey } from "@/app/variant-page";
+import {
+  getActionCountToHitTarget,
+  getDominantCurrency,
+  getFilteredTransactionShare,
+} from "@/lib/analysis/presentation";
+import type { HabitMerchant, SpendingAnalysis, SubscriptionAuditItem } from "@/lib/analysis/types";
 
 type AnalysisState =
   | { status: "loading" }
   | { status: "missing"; message: string }
   | { status: "error"; message: string }
   | { status: "ready"; analysis: SpendingAnalysis; source: "fixture" | "live" };
-
-type ExplorerRow = {
-  detail: string;
-  key: string;
-  kind: "fixed" | "lever" | "uncertain";
-  label: string;
-  monthlySpend: number;
-};
 
 type RecurringRow = {
   detail: string;
@@ -40,12 +27,9 @@ type RecurringRow = {
 export function AnalysisPanel({
   callbackUrl,
   connectActions,
-  debugHref,
   expectedOrigin,
   initialAnalysis,
   initialSource,
-  showDiagnostics,
-  variant,
 }: {
   callbackUrl: string | null;
   connectActions: Array<{
@@ -53,12 +37,9 @@ export function AnalysisPanel({
     label: string;
     tone: "primary" | "secondary";
   }>;
-  debugHref: string;
   expectedOrigin: string | null;
   initialAnalysis: SpendingAnalysis | null;
   initialSource: "fixture" | "live" | null;
-  showDiagnostics: boolean;
-  variant: VariantKey;
 }) {
   const [state, setState] = useState<AnalysisState>(() =>
     initialAnalysis && initialSource
@@ -147,73 +128,92 @@ export function AnalysisPanel({
   }, [browserHostname, initialAnalysis, initialSource]);
 
   const originMismatch =
-    showDiagnostics &&
     Boolean(expectedOrigin) &&
     Boolean(browserOrigin) &&
     expectedOrigin !== browserOrigin;
 
   if (state.status === "loading") {
-    if (!showDiagnostics) {
-      return (
-        <section className="shell-panel space-y-4">
-          <div className="space-y-2">
-            <p className="eyebrow">Preparing analysis</p>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              Pulling the latest spending picture
-            </h2>
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              Separating discretionary behaviour from wealth flow and fixed cost so the recommendation
-              can stay narrow.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <span className="chip chip-quiet">Checking session</span>
-            <span className="chip chip-quiet">Building categories</span>
-            <span className="chip chip-quiet">Ranking levers</span>
-          </div>
-        </section>
-      );
-    }
-
-    return (
-      <section className="grid gap-4">
-        <MetricGrid
-          metrics={[
-            { label: "Session", value: "checking" },
-            { label: "Accounts", value: "..." },
-            { label: "Primary currency", value: "..." },
-            { label: "Analysis", value: "loading" },
-          ]}
-        />
-        <NoticeBlock callbackUrl={callbackUrl} browserOrigin={browserOrigin} expectedOrigin={expectedOrigin} originMismatch={originMismatch} />
-        <section className="shell-panel">
-          <p className="eyebrow">Loading</p>
-          <h2 className="mt-3 font-display text-3xl tracking-[-0.04em] text-[var(--foreground)]">
-            Building the live analysis…
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-            Pulling the latest session from Enable Banking, separating behavioural spend from wealth flow,
-            and shaping the result for the current route.
-          </p>
-        </section>
-      </section>
-    );
+    return <LoadingExperience />;
   }
 
   if (state.status === "missing") {
-    if (!showDiagnostics) {
-      return (
-        <section className="shell-panel space-y-5">
-          <div className="space-y-2">
-            <p className="eyebrow">Connect account</p>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              Start with a live bank feed
-            </h2>
-            <p className="text-sm leading-6 text-[var(--muted)]">{state.message}</p>
+    return (
+      <LandingExperience
+        callbackUrl={callbackUrl}
+        connectActions={connectActions}
+        browserOrigin={browserOrigin}
+        expectedOrigin={expectedOrigin}
+        message={state.message}
+        originMismatch={originMismatch}
+      />
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <ErrorExperience
+        connectActions={connectActions}
+        message={state.message}
+      />
+    );
+  }
+
+  return (
+    <ReadyAnalysis
+      analysis={state.analysis}
+      callbackUrl={callbackUrl}
+      browserOrigin={browserOrigin}
+      connectActions={connectActions}
+      expectedOrigin={expectedOrigin}
+      originMismatch={originMismatch}
+      source={state.source}
+    />
+  );
+}
+
+function LandingExperience({
+  browserOrigin,
+  callbackUrl,
+  connectActions,
+  expectedOrigin,
+  message,
+  originMismatch,
+}: {
+  browserOrigin: string | null;
+  callbackUrl: string | null;
+  connectActions: Array<{
+    href: string;
+    label: string;
+    tone: "primary" | "secondary";
+  }>;
+  expectedOrigin: string | null;
+  message: string;
+  originMismatch: boolean;
+}) {
+  return (
+    <section className="app-stack">
+      {originMismatch ? (
+        <NoticeBlock
+          callbackUrl={callbackUrl}
+          browserOrigin={browserOrigin}
+          expectedOrigin={expectedOrigin}
+        />
+      ) : null}
+
+      <section className="hero-grid">
+        <article className="shell-panel thesis-hero">
+          <div className="hero-copy">
+            <p className="eyebrow">Private financial brief</p>
+            <h1 className="hero-title">
+              Find a real 10% raise in spending power without pretending the whole budget is negotiable.
+            </h1>
+            <p className="hero-body">
+              This is not a budgeting dashboard. It strips out wealth flow, fixed costs, and low-confidence
+              merchant noise so the output stays narrow, inspectable, and worth acting on.
+            </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="hero-cta-row">
             {connectActions.map((action) => (
               <a
                 key={action.label}
@@ -223,240 +223,194 @@ export function AnalysisPanel({
                 {action.label}
               </a>
             ))}
-            <Link className="button button-secondary" href={debugHref}>
-              Open debug tools
-            </Link>
           </div>
-        </section>
-      );
-    }
 
-    return (
-      <section className="grid gap-4">
-        <MetricGrid
-          metrics={[
-            { label: "Session", value: "missing" },
-            { label: "Accounts", value: "0" },
-            { label: "Primary currency", value: "—" },
-            { label: "Analysis", value: "not ready" },
-          ]}
-        />
-        <NoticeBlock callbackUrl={callbackUrl} browserOrigin={browserOrigin} expectedOrigin={expectedOrigin} originMismatch={originMismatch} />
-        <section className="shell-panel">
-          <p className="eyebrow">No linked session</p>
-          <h2 className="mt-3 font-display text-3xl tracking-[-0.04em] text-[var(--foreground)]">
-            Connect a bank to generate the comparison views.
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--muted)]">{state.message}</p>
-        </section>
+          <div className="hero-footnote">
+            <span className="hero-footnote-line" />
+            <p>{message}</p>
+          </div>
+        </article>
+
+        <aside className="shell-panel belief-rail">
+          <div className="rail-section">
+            <p className="eyebrow">How the model keeps its nerve</p>
+            <div className="rule-list">
+              <RuleRow
+                title="Wealth flow stays out"
+                body="Savings transfers, FX, and internal money movement are excluded before ranking."
+              />
+              <RuleRow
+                title="Fixed costs stay visible"
+                body="Housing, utilities, and fees remain context, not fake cut opportunities."
+              />
+              <RuleRow
+                title="Ambiguity stays explicit"
+                body="Unclear merchant groups remain broad instead of being over-classified."
+              />
+            </div>
+          </div>
+
+          <div className="rail-section rail-section-tinted">
+            <p className="eyebrow">What you get after connect</p>
+            <ul className="check-list">
+              <li>One ranked starting action</li>
+              <li>Follow-up levers sized by realistic recovery</li>
+              <li>Proof of what was excluded and why</li>
+            </ul>
+          </div>
+        </aside>
       </section>
-    );
-  }
 
-  if (state.status === "error") {
-    if (!showDiagnostics) {
-      return (
-        <section className="shell-panel space-y-5">
-          <div className="space-y-2">
-            <p className="eyebrow">Analysis unavailable</p>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              The spending model could not load
-            </h2>
-            <p className="text-sm leading-6 text-[var(--muted)]">{state.message}</p>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
-            <Link className="button button-primary" href={debugHref}>
-              Open debug tools
-            </Link>
-            {connectActions.map((action) => (
-              <a
-                key={action.label}
-                className="button button-secondary"
-                href={action.href}
-              >
-                {action.label}
-              </a>
-            ))}
-          </div>
-        </section>
-      );
-    }
-
-    return (
-      <section className="grid gap-4">
-        <MetricGrid
-          metrics={[
-            { label: "Session", value: "error" },
-            { label: "Accounts", value: "0" },
-            { label: "Primary currency", value: "—" },
-            { label: "Analysis", value: "failed" },
-          ]}
-        />
-        <NoticeBlock callbackUrl={callbackUrl} browserOrigin={browserOrigin} expectedOrigin={expectedOrigin} originMismatch={originMismatch} />
-        <section className="callout callout-danger">
-          <p className="font-semibold text-[var(--foreground)]">Analysis failed</p>
-          <p className="mt-2 text-sm leading-6">{state.message}</p>
-        </section>
+      <section className="editorial-band">
+        <div className="band-copy">
+          <p className="eyebrow">Product thesis</p>
+          <p className="band-text">
+            The right outcome is not a perfect category tree. The right outcome is a short list of
+            discretionary moves that could realistically free up monthly spending power.
+          </p>
+        </div>
       </section>
-    );
-  }
-
-  return (
-    <ReadyAnalysis
-      analysis={state.analysis}
-      callbackUrl={callbackUrl}
-      browserOrigin={browserOrigin}
-      expectedOrigin={expectedOrigin}
-      originMismatch={originMismatch}
-      showDiagnostics={showDiagnostics}
-      source={state.source}
-      variant={variant}
-    />
+    </section>
   );
 }
 
-function isLocalDevelopmentHost(hostname: string | null) {
-  if (!hostname) {
-    return false;
-  }
-
+function LoadingExperience() {
   return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "[::1]" ||
-    hostname.endsWith(".local")
+    <section className="app-stack">
+      <section className="hero-grid">
+        <article className="shell-panel thesis-hero">
+          <div className="hero-copy">
+            <div className="skeleton skeleton-chip" />
+            <div className="skeleton skeleton-title" />
+            <div className="skeleton skeleton-title skeleton-title-short" />
+            <div className="skeleton skeleton-body" />
+            <div className="skeleton skeleton-body skeleton-body-short" />
+          </div>
+          <div className="hero-cta-row">
+            <div className="skeleton skeleton-button" />
+            <div className="skeleton skeleton-button skeleton-button-ghost" />
+          </div>
+        </article>
+
+        <aside className="shell-panel belief-rail">
+          <div className="skeleton skeleton-chip" />
+          <div className="skeleton skeleton-rule" />
+          <div className="skeleton skeleton-rule" />
+          <div className="skeleton skeleton-rule" />
+          <div className="skeleton skeleton-panel" />
+        </aside>
+      </section>
+
+      <section className="recommendation-grid">
+        <article className="shell-panel recommendation-hero">
+          <div className="skeleton skeleton-chip" />
+          <div className="skeleton skeleton-metric" />
+          <div className="skeleton skeleton-body" />
+          <div className="skeleton skeleton-controls" />
+          <div className="skeleton skeleton-primary" />
+        </article>
+
+        <section className="action-stack">
+          <div className="skeleton skeleton-action" />
+          <div className="skeleton skeleton-action" />
+          <div className="skeleton skeleton-action" />
+        </section>
+      </section>
+
+      <section className="proof-grid">
+        <div className="shell-panel proof-panel">
+          <div className="skeleton skeleton-proof-header" />
+          <div className="skeleton skeleton-proof-grid" />
+        </div>
+        <div className="shell-panel proof-panel">
+          <div className="skeleton skeleton-proof-header" />
+          <div className="skeleton skeleton-list" />
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function ErrorExperience({
+  connectActions,
+  message,
+}: {
+  connectActions: Array<{
+    href: string;
+    label: string;
+    tone: "primary" | "secondary";
+  }>;
+  message: string;
+}) {
+  return (
+    <section className="app-stack">
+      <article className="shell-panel error-stage">
+        <div className="hero-copy">
+          <p className="eyebrow">Analysis unavailable</p>
+          <h2 className="hero-title hero-title-compact">The spending brief could not be built.</h2>
+          <p className="hero-body">{message}</p>
+        </div>
+
+        <div className="hero-cta-row">
+          {connectActions.map((action) => (
+            <a
+              key={action.label}
+              className={action.tone === "primary" ? "button button-primary" : "button button-secondary"}
+              href={action.href}
+            >
+              {action.label}
+            </a>
+          ))}
+        </div>
+      </article>
+    </section>
   );
 }
 
 function ReadyAnalysis({
   analysis,
-  callbackUrl,
   browserOrigin,
+  callbackUrl,
+  connectActions,
   expectedOrigin,
   originMismatch,
-  showDiagnostics,
   source,
-  variant,
 }: {
   analysis: SpendingAnalysis;
-  callbackUrl: string | null;
   browserOrigin: string | null;
+  callbackUrl: string | null;
+  connectActions: Array<{
+    href: string;
+    label: string;
+    tone: "primary" | "secondary";
+  }>;
   expectedOrigin: string | null;
   originMismatch: boolean;
-  showDiagnostics: boolean;
   source: "fixture" | "live";
-  variant: VariantKey;
 }) {
   const baseline = analysis.baseline;
-  const dominantCurrency = baseline?.currency ?? analysis.currencySummary.primaryCurrency ?? "EUR";
-  const filteredTransactions =
-    analysis.debugCounts.wealthFlowTransactions +
-    analysis.debugCounts.fixedCostTransactions +
-    analysis.debugCounts.excludedOneOffTransactions;
-  const filteredShare = analysis.debugCounts.totalTransactions
-    ? filteredTransactions / analysis.debugCounts.totalTransactions
-    : 0;
-
-  const explorerRows = useMemo(
-    () =>
-      buildExplorerRows(
-        analysis.fixedCostContext,
-        analysis.topLevers,
-        analysis.uncertainSpend,
-        dominantCurrency,
-      ),
-    [analysis.fixedCostContext, analysis.topLevers, analysis.uncertainSpend, dominantCurrency],
-  );
+  const dominantCurrency = getDominantCurrency(analysis);
+  const filteredShare = getFilteredTransactionShare(analysis.debugCounts);
   const recurringRows = useMemo(
     () => buildRecurringRows(analysis.habitMerchants, analysis.subscriptions, dominantCurrency),
     [analysis.habitMerchants, analysis.subscriptions, dominantCurrency],
   );
-
-  const metrics = [
-    { label: "Session", value: source === "fixture" ? "sample" : "present" },
-    { label: "Accounts", value: String(analysis.accountCount) },
-    { label: "Primary currency", value: analysis.currencySummary.primaryCurrency ?? "—" },
-    { label: "Generated", value: formatGeneratedAt(analysis.generatedAt) },
-  ];
-
-  return (
-    <section className="grid gap-4">
-      {showDiagnostics ? <MetricGrid metrics={metrics} /> : null}
-      {showDiagnostics ? (
-        <NoticeBlock
-          callbackUrl={callbackUrl}
-          browserOrigin={browserOrigin}
-          expectedOrigin={expectedOrigin}
-          originMismatch={originMismatch}
-        />
-      ) : null}
-      {showDiagnostics && source === "fixture" ? (
-        <section className="callout callout-neutral">
-          <span className="font-semibold text-[var(--foreground)]">Sample analysis fixture:</span>{" "}
-          using a synthetic, sanitized payload in local development because no live session was available.
-        </section>
-      ) : null}
-      {showDiagnostics && analysis.currencySummary.otherCurrencies.length > 0 ? (
-        <section className="callout callout-neutral">
-          <span className="font-semibold text-[var(--foreground)]">Other currencies detected:</span>{" "}
-          {analysis.currencySummary.otherCurrencies.join(", ")}
-        </section>
-      ) : null}
-
-      {variant === "brief" ? (
-        <BriefVariant
-          analysis={analysis}
-          baseline={baseline}
-          dominantCurrency={dominantCurrency}
-          filteredShare={filteredShare}
-          source={source}
-        />
-      ) : null}
-
-      {variant === "diagnosis" ? (
-        <DiagnosisVariant
-          analysis={analysis}
-          baseline={baseline}
-          dominantCurrency={dominantCurrency}
-          filteredShare={filteredShare}
-        />
-      ) : null}
-
-      {variant === "explorer" ? (
-        <ExplorerVariant
-          analysis={analysis}
-          baseline={baseline}
-          dominantCurrency={dominantCurrency}
-          explorerRows={explorerRows}
-          recurringRows={recurringRows}
-        />
-      ) : null}
-    </section>
-  );
-}
-
-function BriefVariant({
-  analysis,
-  baseline,
-  dominantCurrency,
-  filteredShare,
-  source,
-}: {
-  analysis: SpendingAnalysis;
-  baseline: SpendingAnalysis["baseline"];
-  dominantCurrency: string;
-  filteredShare: number;
-  source: "fixture" | "live";
-}) {
   const defaultTargetPercentage = baseline ? Math.round(baseline.targetPercentage * 100) : 10;
+  const defaultTargetAmount = baseline ? Math.round(baseline.raiseTarget) : 250;
+  const [targetMode, setTargetMode] = useState<"amount" | "percentage">("percentage");
   const [targetPercentage, setTargetPercentage] = useState(defaultTargetPercentage);
-  const [activeLeverIndex, setActiveLeverIndex] = useState(0);
+  const [targetAmount, setTargetAmount] = useState(defaultTargetAmount);
 
   const activeTargetAmount = baseline
-    ? Math.max(25, roundCurrency((baseline.discretionaryMonthlySpend * targetPercentage) / 100))
+    ? targetMode === "percentage"
+      ? Math.max(25, roundCurrency((baseline.discretionaryMonthlySpend * targetPercentage) / 100))
+      : Math.max(25, roundCurrency(targetAmount))
     : 0;
-  const activeTargetPercentage = baseline ? Math.max(1, targetPercentage) : 0;
+  const activeTargetPercentage = baseline
+    ? targetMode === "amount"
+      ? Math.max(1, Math.round((activeTargetAmount / baseline.discretionaryMonthlySpend) * 100))
+      : Math.max(1, targetPercentage)
+    : 0;
   const retargetedLevers = baseline
     ? analysis.topLevers.map((lever) => ({
         ...lever,
@@ -464,12 +418,7 @@ function BriefVariant({
       }))
     : analysis.topLevers;
   const primaryLever = retargetedLevers[0];
-  const actionLevers = retargetedLevers.slice(0, 4);
-  const activeLever = actionLevers[activeLeverIndex] ?? actionLevers[0];
-  const strongestImpact = Math.max(
-    ...actionLevers.map((lever) => lever.estimatedHalfCutImpact),
-    1,
-  );
+  const secondaryLevers = retargetedLevers.slice(1, 5);
   const totalRecoverable = retargetedLevers.reduce(
     (total, lever) => total + lever.estimatedHalfCutImpact,
     0,
@@ -477,162 +426,255 @@ function BriefVariant({
   const totalCoverage = activeTargetAmount
     ? Math.min(1, totalRecoverable / activeTargetAmount)
     : 0;
-  const targetPresets = [5, 10, 15];
+  const actionCountToHitTarget = getActionCountToHitTarget(retargetedLevers, activeTargetAmount);
+  const targetPresets =
+    targetMode === "percentage"
+      ? [5, 10, 15]
+      : [0.5, 1, 1.5].map((multiplier) => roundCurrency(defaultTargetAmount * multiplier));
 
   return (
-    <>
-      <section className="brief-mobile-stack">
-        <article className="shell-panel brief-hero-panel brief-focus-panel">
-          {primaryLever && baseline && activeLever ? (
-            <>
-              <div className="brief-focus-meta">
-                <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
-                  {source === "fixture" ? "Sample" : "Live"}
-                </span>
-                <span className="dashboard-inline-note">
-                  {formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency)} monthly spend
-                </span>
+    <section className="app-stack">
+      {originMismatch ? (
+        <NoticeBlock
+          callbackUrl={callbackUrl}
+          browserOrigin={browserOrigin}
+          expectedOrigin={expectedOrigin}
+        />
+      ) : null}
+
+      {source === "fixture" ? (
+        <section className="callout callout-neutral">
+          Sample mode is active because there is no live bank session in this environment yet.
+        </section>
+      ) : null}
+
+      <section className="hero-grid">
+        <article className="shell-panel thesis-hero thesis-hero-live">
+          <div className="hero-copy">
+            <div className="brief-meta-row">
+              <span className={`chip ${source === "fixture" ? "chip-accent" : "chip-success"}`}>
+                {source === "fixture" ? "Sample analysis" : "Live analysis"}
+              </span>
+              <span className="dashboard-inline-note">
+                Generated {formatGeneratedAt(analysis.generatedAt)}
+              </span>
+            </div>
+
+            <p className="eyebrow">Monthly raise target</p>
+            <h1 className="hero-title hero-title-live">
+              {formatCurrency(activeTargetAmount, baseline?.currency ?? dominantCurrency)}
+            </h1>
+            <p className="hero-body">
+              {primaryLever && baseline
+                ? `${primaryLever.label} is the clearest place to start. The current top levers cover ${formatPercent(
+                    totalCoverage,
+                  )} of the target without leaning on housing, utilities, or money movement.`
+                : "The current session is present, but it does not yet contain a strong enough discretionary signal to rank a confident starting move."}
+            </p>
+          </div>
+
+          {baseline ? (
+            <div className="brief-control-row">
+              <div className="target-mode-strip">
+                <button
+                  className="target-mode-button"
+                  data-active={targetMode === "percentage"}
+                  onClick={() => setTargetMode("percentage")}
+                  type="button"
+                >
+                  Percent
+                </button>
+                <button
+                  className="target-mode-button"
+                  data-active={targetMode === "amount"}
+                  onClick={() => setTargetMode("amount")}
+                  type="button"
+                >
+                  Cash
+                </button>
               </div>
 
-              <div className="brief-target-core">
-                <p className="eyebrow">Target</p>
-                <div className="brief-target-row">
-                  <h2 className="brief-target-amount">{formatCurrency(activeTargetAmount, baseline.currency)}</h2>
-                  <span className="brief-target-percent">{activeTargetPercentage}%</span>
+              <label className="target-field">
+                <span className="sr-only">
+                  {targetMode === "percentage" ? "Percent target" : "Cash target"}
+                </span>
+                <div className="target-input-wrap">
+                  <span className="target-prefix">
+                    {targetMode === "percentage" ? "%" : baseline.currency}
+                  </span>
+                  <input
+                    aria-label={targetMode === "percentage" ? "Percent target" : "Cash target"}
+                    className="target-input"
+                    inputMode="decimal"
+                    onChange={(event) => {
+                      const parsed = Number(event.target.value.replace(/[^\d.]/g, ""));
+
+                      if (!Number.isFinite(parsed)) {
+                        return;
+                      }
+
+                      if (targetMode === "percentage") {
+                        setTargetPercentage(clamp(Math.round(parsed), 1, 50));
+                        return;
+                      }
+
+                      setTargetAmount(clamp(roundCurrency(parsed), 25, 5000));
+                    }}
+                    type="text"
+                    value={
+                      targetMode === "percentage"
+                        ? String(activeTargetPercentage)
+                        : String(activeTargetAmount)
+                    }
+                  />
                 </div>
-                <p className="brief-signal-copy">
-                  {formatPercent(totalCoverage)} covered by current signals.
-                </p>
-              </div>
+              </label>
 
-              <div className="brief-target-presets" aria-label="Target percentage">
+              <div className="target-preset-row">
                 {targetPresets.map((preset) => (
                   <button
                     key={preset}
                     className="target-preset"
-                    data-active={preset === activeTargetPercentage}
-                    onClick={() => setTargetPercentage(preset)}
+                    data-active={
+                      targetMode === "percentage"
+                        ? preset === activeTargetPercentage
+                        : preset === activeTargetAmount
+                    }
+                    onClick={() => {
+                      if (targetMode === "percentage") {
+                        setTargetPercentage(preset);
+                        return;
+                      }
+
+                      setTargetAmount(preset);
+                    }}
                     type="button"
                   >
-                    {preset}%
+                    {targetMode === "percentage"
+                      ? `${preset}%`
+                      : formatCurrency(preset, baseline.currency)}
                   </button>
                 ))}
               </div>
-            </>
-          ) : (
-            <EmptyCopy>
-              No confident top levers yet. This usually means the latest bank feed is dominated by money
-              movement, fixed cost, or unresolved merchant noise.
-            </EmptyCopy>
-          )}
-        </article>
-      </section>
-
-      <section className="brief-bubble-zone">
-        <div className="brief-section-heading brief-bubble-heading">
-          <div>
-            <p className="eyebrow">Signals</p>
-            <h3 className="brief-section-title">{activeLever?.label ?? "Spending"}</h3>
-          </div>
-          {activeLever && baseline ? (
-            <p className="brief-section-value">
-              {formatCurrency(activeLever.estimatedHalfCutImpact, baseline.currency)}
-            </p>
+            </div>
           ) : null}
-        </div>
+        </article>
 
-        {actionLevers.length === 0 || !baseline ? (
-          <section className="shell-panel">
-            <EmptyCopy>No confident follow-up levers yet. The current session is still too noisy.</EmptyCopy>
-          </section>
-        ) : (
-          <>
-            <div aria-label="Spending signals" className="brief-bubble-field">
-              {actionLevers.map((lever, index) => (
-                <button
-                  key={lever.categoryKey}
-                  className="brief-impact-bubble"
-                  data-active={index === activeLeverIndex}
-                  onClick={() => setActiveLeverIndex(index)}
-                  style={
-                    {
-                      "--bubble-fill": `${Math.min(100, Math.round(lever.targetCoverage * 100))}%`,
-                      "--bubble-size": `${7.8 + (lever.estimatedHalfCutImpact / strongestImpact) * 3.4}rem`,
-                    } as CSSProperties
-                  }
-                  type="button"
-                >
-                  <span className="brief-bubble-label">{lever.label}</span>
-                  <span className="brief-bubble-value">
-                    {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
-                  </span>
-                  <span className="brief-bubble-percent">{formatPercent(lever.targetCoverage)}</span>
-                </button>
-              ))}
-            </div>
-
-            {activeLever ? (
-              <p className="brief-active-hint">
-                {activeLever.merchantExamples.slice(0, 3).join(" / ")}
-              </p>
-            ) : null}
-          </>
-        )}
+        <aside className="shell-panel belief-rail belief-rail-live">
+          <div className="rail-stat">
+            <p className="eyebrow">Discretionary baseline</p>
+            <p className="rail-value">
+              {baseline ? formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency) : "—"}
+            </p>
+          </div>
+          <div className="rail-stat">
+            <p className="eyebrow">Actions to hit target</p>
+            <p className="rail-value">{actionCountToHitTarget || "—"}</p>
+          </div>
+          <div className="rail-stat">
+            <p className="eyebrow">Filtered before ranking</p>
+            <p className="rail-value">{formatPercent(filteredShare)}</p>
+          </div>
+          <div className="rail-section rail-section-tinted">
+            <p className="eyebrow">Current stack</p>
+            <p className="rail-copy">
+              {retargetedLevers.length > 0
+                ? `${retargetedLevers.length} ranked levers survived the model boundaries in ${dominantCurrency}.`
+                : `No ranked levers surfaced in ${dominantCurrency} yet.`}
+            </p>
+          </div>
+        </aside>
       </section>
 
-      <section className="shell-panel brief-details-panel">
-        <details className="brief-details">
-          <summary className="brief-details-summary">
-            <span>How this brief works</span>
-            <span className="brief-details-meta">
-              {formatCurrency(baseline?.discretionaryMonthlySpend ?? 0, baseline?.currency ?? dominantCurrency)} baseline
-            </span>
-          </summary>
+      <section className="recommendation-grid">
+        <article className="shell-panel recommendation-hero">
+          <div className="space-y-3">
+            <p className="eyebrow">Start here</p>
+            {primaryLever && baseline ? (
+              <>
+                <div className="feature-header">
+                  <h2 className="feature-title">{primaryLever.label}</h2>
+                  <p className="action-amount action-amount-small">
+                    {formatCurrency(primaryLever.estimatedHalfCutImpact, baseline.currency)}
+                  </p>
+                </div>
+                <p className="hero-body">
+                  {formatCurrency(primaryLever.monthlySpend, baseline.currency)} each month. Covers{" "}
+                  {formatPercent(primaryLever.targetCoverage)} of the current target. Merchant examples:{" "}
+                  {primaryLever.merchantExamples.join(", ")}.
+                </p>
+              </>
+            ) : (
+              <EmptyCopy>
+                No confident top lever surfaced. The feed is still dominated by excluded flows or unresolved
+                merchant noise.
+              </EmptyCopy>
+            )}
+          </div>
+        </article>
 
-          <div className="brief-details-body">
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              The dashboard only ranks discretionary behaviour in the dominant currency, excludes wealth flow
-              before advice, and keeps ambiguity visible instead of pretending uncertain merchants are precise.
+        <section className="action-stack">
+          <div className="section-heading">
+            <p className="eyebrow">Follow-up actions</p>
+            <p className="section-copy">
+              Ranked by realistic monthly recovery, not by forcing every transaction into a budgeting ritual.
             </p>
+          </div>
 
-            <div className="brief-details-grid">
-              <div>
-                <p className="eyebrow">Filtered before ranking</p>
-                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                  {formatPercent(filteredShare)}
-                </p>
-              </div>
-              <div>
-                <p className="eyebrow">Wealth flow excluded</p>
-                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                  {analysis.debugCounts.wealthFlowTransactions}
-                </p>
-              </div>
-              <div>
-                <p className="eyebrow">Fixed cost excluded</p>
-                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                  {analysis.debugCounts.fixedCostTransactions}
-                </p>
-              </div>
-              <div>
-                <p className="eyebrow">Ambiguous groups</p>
-                <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                  {analysis.uncertainSpend.length}
-                </p>
-              </div>
-            </div>
+          {secondaryLevers.length === 0 || !baseline ? (
+            <article className="shell-panel">
+              <EmptyCopy>No confident follow-up actions are ready yet.</EmptyCopy>
+            </article>
+          ) : (
+            secondaryLevers.map((lever, index) => (
+              <article key={lever.categoryKey} className="shell-panel action-row">
+                <div className="action-row-index">0{index + 2}</div>
+                <div className="action-row-copy">
+                  <h3 className="action-row-title">{lever.label}</h3>
+                  <p className="action-row-body">
+                    {formatCurrency(lever.monthlySpend, baseline.currency)} each month. Examples:{" "}
+                    {lever.merchantExamples.join(", ")}.
+                  </p>
+                </div>
+                <div className="action-row-value">
+                  <p className="action-row-amount">
+                    {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}
+                  </p>
+                  <p className="action-row-coverage">{formatPercent(lever.targetCoverage)}</p>
+                </div>
+              </article>
+            ))
+          )}
+        </section>
+      </section>
 
-            <CompactList
-              emptyMessage="No strong recurring patterns surfaced."
-              items={[...analysis.subscriptions.slice(0, 2), ...analysis.habitMerchants.slice(0, 2)].map((item) => ({
-                key: item.label,
-                label: item.label,
-                value: formatCurrency(item.monthlySpend, dominantCurrency),
-                detail: `${item.count} recurring hits`,
-              }))}
-              title="Recurring patterns that influenced the ranking."
+      <section className="proof-grid">
+        <article className="shell-panel proof-panel proof-panel-wide">
+          <div className="section-heading">
+            <p className="eyebrow">Model boundaries</p>
+            <h3 className="proof-title">What the brief refuses to count as advice.</h3>
+          </div>
+
+          <div className="boundary-grid">
+            <BoundaryStat
+              label="Wealth flow"
+              value={String(analysis.debugCounts.wealthFlowTransactions)}
             />
+            <BoundaryStat
+              label="Fixed cost"
+              value={String(analysis.debugCounts.fixedCostTransactions)}
+            />
+            <BoundaryStat
+              label="One-off spend"
+              value={String(analysis.debugCounts.excludedOneOffTransactions)}
+            />
+            <BoundaryStat
+              label="Ambiguous groups"
+              value={String(analysis.uncertainSpend.length)}
+            />
+          </div>
 
+          <div className="proof-columns">
             <CompactList
               emptyMessage="No fixed-cost context detected in the primary currency."
               items={analysis.fixedCostContext.slice(0, 4).map((item) => ({
@@ -641,319 +683,169 @@ function BriefVariant({
                 value: formatCurrency(item.monthlySpend, dominantCurrency),
                 detail: item.merchantExamples.join(", "),
               }))}
-              title="Fixed costs stay visible as context but do not get ranked."
+              title="Fixed costs remain visible as context."
             />
-          </div>
-        </details>
-      </section>
-    </>
-  );
-}
 
-function roundCurrency(value: number) {
-  return Math.round(value);
-}
-
-function DiagnosisVariant({
-  analysis,
-  baseline,
-  dominantCurrency,
-  filteredShare,
-}: {
-  analysis: SpendingAnalysis;
-  baseline: SpendingAnalysis["baseline"];
-  dominantCurrency: string;
-  filteredShare: number;
-}) {
-  return (
-    <>
-      <section className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Model frame</p>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              Why these levers show up at all
-            </h2>
-            <p className="text-sm leading-6 text-[var(--muted)]">
-              The engine only ranks discretionary behaviour in the dominant currency, keeps fixed cost as
-              context, and excludes wealth flow before advice is generated.
-            </p>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            <LogicCard
-              title="Behavioural spend"
-              body={`${analysis.debugCounts.behaviouralTransactions} transactions survived the initial filter and fed the baseline.`}
-              value={String(analysis.debugCounts.behaviouralTransactions)}
-            />
-            <LogicCard
-              title="Filtered before ranking"
-              body={`${formatPercent(filteredShare)} of total transactions were stripped out as wealth flow, fixed cost, or one-offs.`}
-              value={String(
-                analysis.debugCounts.wealthFlowTransactions +
-                  analysis.debugCounts.fixedCostTransactions +
-                  analysis.debugCounts.excludedOneOffTransactions,
-              )}
-            />
-            <LogicCard
-              title="Uncertainty preserved"
-              body={`${analysis.debugCounts.uncertainTransactions} transactions remain visible as ambiguous rather than being forced into precise categories.`}
-              value={String(analysis.debugCounts.uncertainTransactions)}
-            />
-          </div>
-        </article>
-
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Evidence ledger</p>
-            <h3 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              The ranked output
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            {analysis.topLevers.length === 0 || !baseline ? (
-              <EmptyCopy>
-                No confident top levers yet. The current session does not produce enough trusted behavioural
-                signal in one primary currency.
-              </EmptyCopy>
-            ) : (
-              analysis.topLevers.map((lever) => (
-                <article key={lever.categoryKey} className="evidence-card">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-lg font-semibold text-[var(--foreground)]">{lever.label}</h4>
-                        <span className={`chip ${confidenceChipClass(lever.confidence)}`}>
-                          {formatConfidence(lever.confidence)}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                        {formatCurrency(lever.monthlySpend, baseline.currency)} per month, half-cut impact{" "}
-                        {formatCurrency(lever.estimatedHalfCutImpact, baseline.currency)}, controllability{" "}
-                        {Math.round(lever.controllabilityScore * 100)}%.
-                      </p>
-                    </div>
-                    <div className="rounded-[1rem] bg-white px-3 py-2 text-right ring-1 ring-black/5">
-                      <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Coverage</p>
-                      <p className="mt-1 text-xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-                        {formatPercent(lever.targetCoverage)}
-                      </p>
-                    </div>
-                  </div>
-
-                  {lever.merchantExamples.length > 0 ? (
-                    <p className="mt-4 text-sm text-[var(--muted)]">
-                      Merchant examples: {lever.merchantExamples.join(", ")}
-                    </p>
-                  ) : null}
-                </article>
-              ))
-            )}
-          </div>
-        </article>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Excluded on purpose</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Context without false advice
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            <CompactList
-              emptyMessage="No fixed-cost context detected in the primary currency."
-              items={analysis.fixedCostContext.map((item) => ({
-                key: item.categoryKey,
-                label: item.label,
-                value: formatCurrency(item.monthlySpend, dominantCurrency),
-                detail: item.merchantExamples.join(", "),
-              }))}
-              title="Fixed cost stays visible so the user can understand the whole feed."
-            />
-            <div className="rounded-[1.25rem] bg-[var(--panel-soft)] px-4 py-4 ring-1 ring-[var(--line)]">
-              <p className="text-sm leading-6 text-[var(--muted)]">
-                Wealth flow and internal money movement are removed before ranking because they change balances,
-                not lifestyle spending pressure.
+            <article className="proof-note">
+              <p className="proof-note-text">
+                The app is opinionated on purpose: balances can move for reasons that have nothing to do with
+                lifestyle pressure. That is why transfers and fixed obligations are visible but unranked.
               </p>
-            </div>
+            </article>
           </div>
         </article>
 
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Known ambiguity</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Where confidence is intentionally low
-            </h3>
+        <article className="shell-panel proof-panel">
+          <div className="section-heading">
+            <p className="eyebrow">Recurring pressure</p>
+            <h3 className="proof-title">Patterns that shaped the recommendation.</h3>
           </div>
 
-          <div className="mt-5 grid gap-3">
-            {analysis.uncertainSpend.length === 0 ? (
-              <EmptyCopy>No unresolved merchant groups are currently muddying the result.</EmptyCopy>
-            ) : (
-              analysis.uncertainSpend.map((item) => (
-                <article key={item.label} className="list-card">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h4 className="text-base font-semibold text-[var(--foreground)]">{item.label}</h4>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{item.reason}</p>
+          {recurringRows.length === 0 ? (
+            <EmptyCopy>No recurring merchant groups were strong enough to surface.</EmptyCopy>
+          ) : (
+            <div className="recurring-stack">
+              {recurringRows.slice(0, 8).map((row) => (
+                <article key={row.key} className="recurring-row">
+                  <div>
+                    <div className="recurring-label-row">
+                      <h4 className="recurring-title">{row.label}</h4>
+                      <span
+                        className={`chip ${row.pattern === "subscription" ? "chip-accent" : "chip-quiet"}`}
+                      >
+                        {row.pattern === "subscription" ? "subscription" : "habit"}
+                      </span>
                     </div>
-                    <span className="chip chip-quiet">{item.transactionCount} hits</span>
+                    <p className="recurring-body">{row.detail}</p>
                   </div>
-                  <p className="mt-3 text-sm text-[var(--muted)]">
-                    Monthly value {formatCurrency(item.monthlySpend, dominantCurrency)}
-                  </p>
+                  <p className="recurring-value">{formatCurrency(row.monthlySpend, dominantCurrency)}</p>
                 </article>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </article>
       </section>
-    </>
+
+      <section className="proof-grid">
+        <ExpandablePanel
+          meta={`${analysis.uncertainSpend.length} groups`}
+          title="Open questions and uncertainty"
+        >
+          {analysis.uncertainSpend.length === 0 ? (
+            <EmptyCopy>No unresolved merchant groups are currently muddying the result.</EmptyCopy>
+          ) : (
+            <div className="disclosure-stack">
+              {analysis.uncertainSpend.map((item) => (
+                <DisclosureRow
+                  key={item.label}
+                  detail={item.reason}
+                  label={item.label}
+                  meta={`${item.transactionCount} hits`}
+                  value={formatCurrency(item.monthlySpend, dominantCurrency)}
+                />
+              ))}
+            </div>
+          )}
+        </ExpandablePanel>
+
+        <ExpandablePanel
+          meta={`${analysis.accountCount} accounts`}
+          title="Connection and evidence"
+        >
+          <div className="disclosure-stack">
+            <DisclosureRow
+              detail="The current analysis payload was generated from the linked bank session."
+              label="Session source"
+              meta={source === "fixture" ? "sample" : "live"}
+              value={analysis.currencySummary.primaryCurrency ?? "—"}
+            />
+            <DisclosureRow
+              detail="Reconnect if you want to refresh the output after new transactions post."
+              label="Refresh path"
+              meta="manual reconnect"
+              value={connectActions[0]?.label ?? "Connect"}
+            />
+          </div>
+        </ExpandablePanel>
+      </section>
+    </section>
   );
 }
 
-function ExplorerVariant({
-  analysis,
-  baseline,
-  dominantCurrency,
-  explorerRows,
-  recurringRows,
+function ExpandablePanel({
+  children,
+  meta,
+  title,
 }: {
-  analysis: SpendingAnalysis;
-  baseline: SpendingAnalysis["baseline"];
-  dominantCurrency: string;
-  explorerRows: ExplorerRow[];
-  recurringRows: RecurringRow[];
+  children: React.ReactNode;
+  meta: string;
+  title: string;
 }) {
   return (
-    <>
-      <section className="shell-panel">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-2">
-            <p className="eyebrow">Explorer summary</p>
-            <h2 className="text-3xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">
-              Inspect the stack without losing the plot
-            </h2>
-            <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">
-              This surface keeps the same analysis payload but opens up the category stack, recurring merchant
-              patterns, and unresolved ambiguity for inspection.
-            </p>
-          </div>
+    <article className="shell-panel proof-panel">
+      <details className="brief-details" open>
+        <summary className="brief-details-summary">
+          <span>{title}</span>
+          <span className="brief-details-meta">{meta}</span>
+        </summary>
+        <div className="brief-details-body">{children}</div>
+      </details>
+    </article>
+  );
+}
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            <MetricCard
-              label="Discretionary baseline"
-              value={baseline ? formatCurrency(baseline.discretionaryMonthlySpend, baseline.currency) : "—"}
-            />
-            <MetricCard label="Recurring groups" value={String(recurringRows.length)} />
-            <MetricCard label="Visible stack rows" value={String(explorerRows.length)} />
-          </div>
+function BoundaryStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <article className="boundary-stat">
+      <p className="eyebrow">{label}</p>
+      <p className="boundary-value">{value}</p>
+    </article>
+  );
+}
+
+function DisclosureRow({
+  detail,
+  label,
+  meta,
+  value,
+}: {
+  detail: string;
+  label: string;
+  meta: string;
+  value: string;
+}) {
+  return (
+    <article className="disclosure-row">
+      <div>
+        <div className="recurring-label-row">
+          <h4 className="recurring-title">{label}</h4>
+          <span className="chip chip-quiet">{meta}</span>
         </div>
-      </section>
+        <p className="recurring-body">{detail}</p>
+      </div>
+      <p className="recurring-value">{value}</p>
+    </article>
+  );
+}
 
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr_0.9fr]">
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Category stack</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Ranked signal plus context
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            {explorerRows.length === 0 ? (
-              <EmptyCopy>No category stack available yet for the dominant currency.</EmptyCopy>
-            ) : (
-              explorerRows.map((row) => (
-                <article key={row.key} className="list-card">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-base font-semibold text-[var(--foreground)]">{row.label}</h4>
-                        <span className={`chip ${stackKindClass(row.kind)}`}>{formatExplorerKind(row.kind)}</span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{row.detail}</p>
-                    </div>
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      {formatCurrency(row.monthlySpend, dominantCurrency)}
-                    </p>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </article>
-
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Recurring merchants</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Habits and subscriptions
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            {recurringRows.length === 0 ? (
-              <EmptyCopy>No recurring merchant groups were strong enough to surface.</EmptyCopy>
-            ) : (
-              recurringRows.map((row) => (
-                <article key={row.key} className="list-card">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-base font-semibold text-[var(--foreground)]">{row.label}</h4>
-                        <span className={`chip ${row.pattern === "subscription" ? "chip-accent" : "chip-quiet"}`}>
-                          {row.pattern === "subscription" ? "subscription" : "habit"}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{row.detail}</p>
-                    </div>
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      {formatCurrency(row.monthlySpend, dominantCurrency)}
-                    </p>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </article>
-
-        <article className="shell-panel">
-          <div className="space-y-2">
-            <p className="eyebrow">Open questions</p>
-            <h3 className="text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">
-              Ambiguity still worth reviewing
-            </h3>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            {analysis.uncertainSpend.length === 0 ? (
-              <EmptyCopy>No unresolved merchant groups are currently visible.</EmptyCopy>
-            ) : (
-              analysis.uncertainSpend.map((item) => (
-                <article key={item.label} className="list-card">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h4 className="text-base font-semibold text-[var(--foreground)]">{item.label}</h4>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{item.reason}</p>
-                    </div>
-                    <span className="chip chip-quiet">{item.transactionCount} hits</span>
-                  </div>
-                  <p className="mt-3 text-sm text-[var(--muted)]">
-                    Monthly value {formatCurrency(item.monthlySpend, dominantCurrency)}
-                  </p>
-                </article>
-              ))
-            )}
-          </div>
-        </article>
-      </section>
-    </>
+function RuleRow({
+  body,
+  title,
+}: {
+  body: string;
+  title: string;
+}) {
+  return (
+    <article className="rule-row">
+      <p className="rule-title">{title}</p>
+      <p className="rule-body">{body}</p>
+    </article>
   );
 }
 
@@ -961,17 +853,11 @@ function NoticeBlock({
   callbackUrl,
   browserOrigin,
   expectedOrigin,
-  originMismatch,
 }: {
   callbackUrl: string | null;
   browserOrigin: string | null;
   expectedOrigin: string | null;
-  originMismatch: boolean;
 }) {
-  if (!originMismatch) {
-    return null;
-  }
-
   return (
     <section className="callout callout-danger">
       <p className="font-semibold text-[var(--foreground)]">Origin mismatch</p>
@@ -998,19 +884,19 @@ function CompactList({
   title: string;
 }) {
   return (
-    <section className="rounded-[1.35rem] bg-[var(--panel-soft)] px-4 py-4 ring-1 ring-[var(--line)]">
+    <section className="proof-list">
       <p className="text-sm font-semibold text-[var(--foreground)]">{title}</p>
       {items.length === 0 ? (
         <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{emptyMessage}</p>
       ) : (
-        <div className="mt-4 grid gap-3">
+        <div className="proof-list-rows">
           {items.map((item) => (
-            <div key={item.key} className="flex items-start justify-between gap-4">
+            <div key={item.key} className="proof-list-row">
               <div>
-                <p className="text-sm font-semibold text-[var(--foreground)]">{item.label}</p>
-                <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{item.detail || "—"}</p>
+                <p className="proof-list-label">{item.label}</p>
+                <p className="proof-list-detail">{item.detail || "—"}</p>
               </div>
-              <p className="text-sm font-semibold text-[var(--foreground)]">{item.value}</p>
+              <p className="proof-list-value">{item.value}</p>
             </div>
           ))}
         </div>
@@ -1021,102 +907,6 @@ function CompactList({
 
 function EmptyCopy({ children }: { children: string }) {
   return <p className="text-sm leading-6 text-[var(--muted)]">{children}</p>;
-}
-
-function LogicCard({
-  body,
-  title,
-  value,
-}: {
-  body: string;
-  title: string;
-  value: string;
-}) {
-  return (
-    <article className="rounded-[1.25rem] bg-[var(--panel-soft)] px-4 py-4 ring-1 ring-[var(--line)]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-[var(--foreground)]">{title}</p>
-          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{body}</p>
-        </div>
-        <p className="text-2xl font-semibold tracking-[-0.04em] text-[var(--foreground)]">{value}</p>
-      </div>
-    </article>
-  );
-}
-
-function MetricGrid({
-  metrics,
-}: {
-  metrics: Array<{ label: string; value: string }>;
-}) {
-  return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-      {metrics.map((metric) => (
-        <MetricCard key={metric.label} label={metric.label} value={metric.value} />
-      ))}
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <article className="metric-card">
-      <p className="eyebrow">{label}</p>
-      <p className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">{value}</p>
-    </article>
-  );
-}
-
-function buildExplorerRows(
-  fixedCostContext: FixedCostItem[],
-  topLevers: AnalysisLever[],
-  uncertainSpend: UncertainSpendItem[],
-  currency: string,
-): ExplorerRow[] {
-  return [
-    ...topLevers.map((lever) => ({
-      detail: `${formatPercent(lever.targetCoverage)} of target. Examples: ${
-        lever.merchantExamples.join(", ") || "none listed"
-      }.`,
-      key: `lever-${lever.categoryKey}`,
-      kind: "lever" as const,
-      label: lever.label,
-      monthlySpend: lever.monthlySpend,
-    })),
-    ...fixedCostContext.map((item) => ({
-      detail: `Context only. ${item.merchantExamples.join(", ") || "No merchant examples"}.`,
-      key: `fixed-${item.categoryKey}`,
-      kind: "fixed" as const,
-      label: item.label,
-      monthlySpend: item.monthlySpend,
-    })),
-    ...uncertainSpend.map((item) => ({
-      detail: `${item.transactionCount} hits. ${item.reason}`,
-      key: `uncertain-${item.label}`,
-      kind: "uncertain" as const,
-      label: item.label,
-      monthlySpend: item.monthlySpend,
-    })),
-  ]
-    .filter((row) => row.monthlySpend > 0)
-    .sort((left, right) => right.monthlySpend - left.monthlySpend)
-    .slice(0, 12)
-    .map((row) => ({
-      ...row,
-      detail:
-        row.kind === "fixed"
-          ? row.detail
-          : row.kind === "uncertain"
-            ? row.detail
-            : `${row.detail} Monthly value ${formatCurrency(row.monthlySpend, currency)}.`,
-    }));
 }
 
 function buildRecurringRows(
@@ -1144,56 +934,28 @@ function buildRecurringRows(
     })),
   ]
     .filter((row) => row.monthlySpend > 0)
-    .sort((left, right) => right.monthlySpend - left.monthlySpend)
-    .slice(0, 12);
+    .sort((left, right) => right.monthlySpend - left.monthlySpend);
 }
 
-function confidenceChipClass(confidence: AnalysisLever["confidence"]) {
-  if (confidence === "high") {
-    return "chip-success";
+function isLocalDevelopmentHost(hostname: string | null) {
+  if (!hostname) {
+    return false;
   }
 
-  if (confidence === "medium") {
-    return "chip-accent";
-  }
-
-  return "chip-quiet";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname.endsWith(".local")
+  );
 }
 
-function stackKindClass(kind: ExplorerRow["kind"]) {
-  if (kind === "lever") {
-    return "chip-success";
-  }
-
-  if (kind === "fixed") {
-    return "chip-quiet";
-  }
-
-  return "chip-accent";
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
-function formatConfidence(confidence: AnalysisLever["confidence"]) {
-  if (confidence === "high") {
-    return "high confidence";
-  }
-
-  if (confidence === "medium") {
-    return "medium confidence";
-  }
-
-  return "low confidence";
-}
-
-function formatExplorerKind(kind: ExplorerRow["kind"]) {
-  if (kind === "lever") {
-    return "ranked lever";
-  }
-
-  if (kind === "fixed") {
-    return "fixed context";
-  }
-
-  return "ambiguous";
+function roundCurrency(value: number) {
+  return Math.round(value);
 }
 
 function formatCurrency(value: number, currency: string) {
