@@ -16,6 +16,7 @@ Diagnosis-first spending analysis on top of Enable Banking.
 - `web app`: one private product page that turns from conviction layer into live brief
 - `analysis API`: backend-owned contract a future mobile client can consume
 - `raw session API`: live account JSON for verification
+- `roadmap`: see [`docs/roadmap.md`](docs/roadmap.md)
 
 This repo is not a budgeting dashboard. The core promise is:
 
