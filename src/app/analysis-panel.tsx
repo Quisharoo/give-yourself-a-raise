@@ -9,6 +9,7 @@ import {
   getFilteredTransactionShare,
 } from "@/lib/analysis/presentation";
 import type { HabitMerchant, SpendingAnalysis, SubscriptionAuditItem } from "@/lib/analysis/types";
+import type { EnableBankingAspsp, EnableBankingPsuType } from "@/lib/enable-banking/types";
 
 type AnalysisState =
   | { status: "loading" }
@@ -24,19 +25,20 @@ type RecurringRow = {
   pattern: "habit" | "subscription";
 };
 
+type BankCountry = {
+  code: string;
+  label: string;
+};
+
 export function AnalysisPanel({
+  bankCountries,
   callbackUrl,
-  connectActions,
   expectedOrigin,
   initialAnalysis,
   initialSource,
 }: {
+  bankCountries: BankCountry[];
   callbackUrl: string | null;
-  connectActions: Array<{
-    href: string;
-    label: string;
-    tone: "primary" | "secondary";
-  }>;
   expectedOrigin: string | null;
   initialAnalysis: SpendingAnalysis | null;
   initialSource: "fixture" | "live" | null;
@@ -139,8 +141,8 @@ export function AnalysisPanel({
   if (state.status === "missing") {
     return (
       <LandingExperience
+        bankCountries={bankCountries}
         callbackUrl={callbackUrl}
-        connectActions={connectActions}
         browserOrigin={browserOrigin}
         expectedOrigin={expectedOrigin}
         message={state.message}
@@ -152,7 +154,8 @@ export function AnalysisPanel({
   if (state.status === "error") {
     return (
       <ErrorExperience
-        connectActions={connectActions}
+        bankCountries={bankCountries}
+        expectedOrigin={expectedOrigin}
         message={state.message}
       />
     );
@@ -163,7 +166,6 @@ export function AnalysisPanel({
       analysis={state.analysis}
       callbackUrl={callbackUrl}
       browserOrigin={browserOrigin}
-      connectActions={connectActions}
       expectedOrigin={expectedOrigin}
       originMismatch={originMismatch}
       source={state.source}
@@ -172,20 +174,16 @@ export function AnalysisPanel({
 }
 
 function LandingExperience({
+  bankCountries,
   browserOrigin,
   callbackUrl,
-  connectActions,
   expectedOrigin,
   message,
   originMismatch,
 }: {
+  bankCountries: BankCountry[];
   browserOrigin: string | null;
   callbackUrl: string | null;
-  connectActions: Array<{
-    href: string;
-    label: string;
-    tone: "primary" | "secondary";
-  }>;
   expectedOrigin: string | null;
   message: string;
   originMismatch: boolean;
@@ -213,17 +211,10 @@ function LandingExperience({
             </p>
           </div>
 
-          <div className="hero-cta-row">
-            {connectActions.map((action) => (
-              <a
-                key={action.label}
-                className={action.tone === "primary" ? "button button-primary" : "button button-secondary"}
-                href={action.href}
-              >
-                {action.label}
-              </a>
-            ))}
-          </div>
+          <BankPicker
+            countries={bankCountries}
+            expectedOrigin={expectedOrigin}
+          />
 
           <div className="hero-footnote">
             <span className="hero-footnote-line" />
@@ -332,14 +323,12 @@ function LoadingExperience() {
 }
 
 function ErrorExperience({
-  connectActions,
+  bankCountries,
+  expectedOrigin,
   message,
 }: {
-  connectActions: Array<{
-    href: string;
-    label: string;
-    tone: "primary" | "secondary";
-  }>;
+  bankCountries: BankCountry[];
+  expectedOrigin: string | null;
   message: string;
 }) {
   return (
@@ -351,17 +340,10 @@ function ErrorExperience({
           <p className="hero-body">{message}</p>
         </div>
 
-        <div className="hero-cta-row">
-          {connectActions.map((action) => (
-            <a
-              key={action.label}
-              className={action.tone === "primary" ? "button button-primary" : "button button-secondary"}
-              href={action.href}
-            >
-              {action.label}
-            </a>
-          ))}
-        </div>
+        <BankPicker
+          countries={bankCountries}
+          expectedOrigin={expectedOrigin}
+        />
       </article>
     </section>
   );
@@ -371,7 +353,6 @@ function ReadyAnalysis({
   analysis,
   browserOrigin,
   callbackUrl,
-  connectActions,
   expectedOrigin,
   originMismatch,
   source,
@@ -379,11 +360,6 @@ function ReadyAnalysis({
   analysis: SpendingAnalysis;
   browserOrigin: string | null;
   callbackUrl: string | null;
-  connectActions: Array<{
-    href: string;
-    label: string;
-    tone: "primary" | "secondary";
-  }>;
   expectedOrigin: string | null;
   originMismatch: boolean;
   source: "fixture" | "live";
@@ -763,13 +739,247 @@ function ReadyAnalysis({
               detail="Reconnect if you want to refresh the output after new transactions post."
               label="Refresh path"
               meta="manual reconnect"
-              value={connectActions[0]?.label ?? "Connect"}
+              value="Bank picker"
             />
           </div>
         </ExpandablePanel>
       </section>
     </section>
   );
+}
+
+function BankPicker({
+  countries,
+  expectedOrigin,
+}: {
+  countries: BankCountry[];
+  expectedOrigin: string | null;
+}) {
+  const [country, setCountry] = useState(countries[0]?.code ?? "IE");
+  const [query, setQuery] = useState("");
+  const [banks, setBanks] = useState<EnableBankingAspsp[]>([]);
+  const [selectedBank, setSelectedBank] = useState<EnableBankingAspsp | null>(null);
+  const [psuType, setPsuType] = useState<EnableBankingPsuType>("personal");
+  const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">("loading");
+  const [message, setMessage] = useState("Loading supported banks.");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const searchParams = new URLSearchParams({ country });
+    const trimmedQuery = query.trim();
+
+    if (trimmedQuery) {
+      searchParams.set("query", trimmedQuery);
+    }
+
+    async function loadBanks() {
+      try {
+        const response = await fetch(`/api/enable-banking/aspsps?${searchParams.toString()}`, {
+          cache: "no-store",
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const data = (await response.json()) as {
+          aspsps?: EnableBankingAspsp[];
+          error?: string;
+        };
+
+        if (!response.ok) {
+          setBanks([]);
+          setSelectedBank(null);
+          setStatus("error");
+          setMessage(data.error ?? "Unable to load supported banks.");
+          return;
+        }
+
+        const nextBanks = data.aspsps ?? [];
+        setBanks(nextBanks);
+        setSelectedBank((current) =>
+          current && nextBanks.some((bank) => isSameBank(bank, current)) ? current : null,
+        );
+
+        if (nextBanks.length === 0) {
+          setStatus("empty");
+          setMessage(trimmedQuery ? "No matching banks found." : "No supported banks found for this country.");
+          return;
+        }
+
+        setStatus("ready");
+        setMessage(`${nextBanks.length} supported banks found.`);
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setBanks([]);
+        setSelectedBank(null);
+        setStatus("error");
+        setMessage(error instanceof Error ? error.message : "Unable to load supported banks.");
+      }
+    }
+
+    void loadBanks();
+
+    return () => {
+      controller.abort();
+    };
+  }, [country, query]);
+
+  const visibleBanks = banks.slice(0, 8);
+  const selectedPsuTypes = selectedBank ? getPsuTypes(selectedBank) : [];
+  const connectHref = selectedBank
+    ? buildConnectHref(expectedOrigin, selectedBank, psuType)
+    : null;
+
+  return (
+    <div className="bank-picker" aria-label="Bank connection picker">
+      <div className="bank-picker-controls">
+        <label className="bank-field">
+          <span>Country</span>
+          <select
+            className="bank-select"
+            onChange={(event) => {
+              setCountry(event.target.value);
+              setSelectedBank(null);
+              setPsuType("personal");
+              setQuery("");
+              setStatus("loading");
+              setMessage("Loading supported banks.");
+            }}
+            value={country}
+          >
+            {countries.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="bank-field bank-field-search">
+          <span>Bank</span>
+          <input
+            className="bank-search"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelectedBank(null);
+              setStatus("loading");
+              setMessage("Loading supported banks.");
+            }}
+            placeholder="Search by bank name"
+            type="search"
+            value={query}
+          />
+        </label>
+      </div>
+
+      <div className="bank-result-list" aria-busy={status === "loading"}>
+        {status === "loading" ? (
+          <BankPickerMessage message={message} />
+        ) : null}
+
+        {status === "error" || status === "empty" ? (
+          <BankPickerMessage message={message} />
+        ) : null}
+
+        {status === "ready"
+          ? visibleBanks.map((bank) => (
+              <button
+                key={`${bank.country}-${bank.name}`}
+                className="bank-result"
+                data-selected={selectedBank ? isSameBank(bank, selectedBank) : false}
+                onClick={() => {
+                  setSelectedBank(bank);
+                  setPsuType(getPsuTypes(bank)[0] ?? "personal");
+                  setQuery(bank.name);
+                }}
+                type="button"
+              >
+                <span className="bank-result-logo" aria-hidden="true">
+                  {bank.name.slice(0, 1).toUpperCase()}
+                </span>
+                <span className="bank-result-copy">
+                  <span className="bank-result-name">{bank.name}</span>
+                  <span className="bank-result-meta">
+                    {bank.country}
+                    {bank.maximum_consent_validity
+                      ? ` · consent up to ${bank.maximum_consent_validity} days`
+                      : ""}
+                    {bank.beta ? " · beta" : ""}
+                  </span>
+                </span>
+              </button>
+            ))
+          : null}
+      </div>
+
+      {selectedPsuTypes.length > 1 ? (
+        <div className="bank-psu-strip" aria-label="Account type">
+          {selectedPsuTypes.map((option) => (
+            <button
+              key={option}
+              className="target-mode-button"
+              data-active={option === psuType}
+              onClick={() => setPsuType(option)}
+              type="button"
+            >
+              {option === "personal" ? "Personal" : "Business"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="bank-picker-footer">
+        {connectHref ? (
+          <a className="button button-primary bank-connect-button" href={connectHref}>
+            Connect {selectedBank?.name}
+          </a>
+        ) : (
+          <button className="button button-primary bank-connect-button" disabled type="button">
+            Select a bank
+          </button>
+        )}
+        <p className="bank-picker-note">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function BankPickerMessage({ message }: { message: string }) {
+  return <p className="bank-picker-empty">{message}</p>;
+}
+
+function isSameBank(left: EnableBankingAspsp, right: EnableBankingAspsp) {
+  return left.country === right.country && left.name === right.name;
+}
+
+function getPsuTypes(bank: EnableBankingAspsp): EnableBankingPsuType[] {
+  const psuTypes = bank.psu_types?.filter(isEnableBankingPsuType) ?? [];
+
+  return psuTypes.length > 0 ? psuTypes : ["personal"];
+}
+
+function isEnableBankingPsuType(value: string): value is EnableBankingPsuType {
+  return value === "personal" || value === "business";
+}
+
+function buildConnectHref(
+  expectedOrigin: string | null,
+  bank: EnableBankingAspsp,
+  psuType: EnableBankingPsuType,
+) {
+  const searchParams = new URLSearchParams({
+    country: bank.country,
+    name: bank.name,
+    psuType,
+  });
+  const path = `/api/enable-banking/connect?${searchParams.toString()}`;
+
+  if (!expectedOrigin) {
+    return path;
+  }
+
+  return new URL(path, expectedOrigin).toString();
 }
 
 function ExpandablePanel({

@@ -32,23 +32,9 @@ export default async function Home({
     null;
   const hasSession = Boolean(cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value);
   const shouldUseFixtureOnFirstPaint = isLocalHost(currentHost) && !hasSession;
-  const connectActions = [
-    {
-      href: appHref(
-        expectedOrigin,
-        "/api/enable-banking/connect?name=Revolut&country=IE&psuType=personal",
-      ),
-      label: "Connect Revolut IE",
-      tone: "primary" as const,
-    },
-    {
-      href: appHref(
-        expectedOrigin,
-        "/api/enable-banking/connect?name=Bankinter&country=ES&psuType=personal",
-      ),
-      label: "Connect Bankinter ES",
-      tone: "secondary" as const,
-    },
+  const bankCountries = [
+    { code: "IE", label: "Ireland" },
+    { code: "ES", label: "Spain" },
   ];
 
   return (
@@ -67,8 +53,8 @@ export default async function Home({
       ) : null}
 
       <AnalysisPanel
+        bankCountries={bankCountries}
         callbackUrl={callbackUrl}
-        connectActions={connectActions}
         expectedOrigin={expectedOrigin}
         initialAnalysis={shouldUseFixtureOnFirstPaint ? sampleSpendingAnalysisFixture : null}
         initialSource={shouldUseFixtureOnFirstPaint ? "fixture" : null}
@@ -136,14 +122,6 @@ function getCallbackUrl() {
   } catch {
     return null;
   }
-}
-
-function appHref(expectedOrigin: string | null, path: string) {
-  if (!expectedOrigin) {
-    return path;
-  }
-
-  return new URL(path, expectedOrigin).toString();
 }
 
 function isLocalHost(host: string | null) {
