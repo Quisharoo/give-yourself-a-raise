@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "give_yourself_a_raise",
+  "project_id": "cc121fea-b0eb-4621-ab84-68b1976fd118"
+}
