@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
@@ -32,6 +35,18 @@ export async function GET(request: NextRequest) {
 
     if (!sessionId) {
       throw new Error("Enable Banking did not return a session ID.");
+    }
+
+    try {
+      const localDir = join(process.cwd(), ".local");
+      await mkdir(localDir, { recursive: true });
+      await writeFile(
+        join(localDir, "eb-session.json"),
+        `${JSON.stringify({ session_id: sessionId, created_at: new Date().toISOString() }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (persistError) {
+      console.error("Failed to persist Enable Banking session for bridge", persistError);
     }
 
     const response = NextResponse.redirect(new URL("/?connected=1", baseUrl));
