@@ -226,6 +226,13 @@ export async function getAccountBalances(accountId: string, psuHeaders?: PsuHead
   return response.balances;
 }
 
+export async function getAccountDetails(accountId: string, psuHeaders?: PsuHeaders) {
+  return enableBankingRequest<{ cash_account_type?: string; currency?: string }>(
+    `/accounts/${accountId}/details`,
+    { headers: psuHeaders },
+  );
+}
+
 export async function getAccountTransactions(
   accountId: string,
   query: TransactionsQuery = {},

@@ -9,7 +9,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { analyzeSpending, getSpendingTransactions } from "@/lib/analysis/engine";
 import type { SpendingTransaction } from "@/lib/analysis/types";
 import { getBankConnection } from "@/lib/connections/store";
-import { getSessionOverview } from "@/lib/enable-banking/client";
+import { getAccountDetails, getSessionOverview } from "@/lib/enable-banking/client";
 import { MCP_ACCESS_SCOPE } from "@/lib/mcp/auth";
 
 const dateProperty = {
@@ -34,7 +34,7 @@ export const CHATGPT_TOOLS: ChatGptTool[] = [
   tool("get_connection_status", "Check whether this user has connected Revolut and when consent expires.", {}),
   tool(
     "get_account_summary",
-    "Return privacy-safe account balances and transaction counts. Does not expose account IDs or IBANs.",
+    "Return linked account types, currencies, balances and transaction counts when provided by the bank. CACC is current, CARD is card, SVGS is savings; missing details do not prove an account is absent. Does not expose account IDs or IBANs.",
     { date_from: dateProperty, date_to: dateProperty },
   ),
   tool(
@@ -121,8 +121,14 @@ async function executeTool(
   if (name === "get_account_summary") {
     const range = readDateRange(rawArguments, 30);
     const overview = await getSessionOverview(connection.sessionId, range);
+    const details = await Promise.all(overview.accounts.map((account) =>
+      getAccountDetails(account.accountId).catch(() => null),
+    ));
     const result = {
-      accounts: overview.accounts.map((account) => ({
+      accounts: overview.accounts.map((account, index) => ({
+        account_type: safeAccountType(details[index]?.cash_account_type),
+        currency: safeAccountCurrency(details[index]?.currency),
+        details_available: details[index] !== null,
         balances: account.balances.map((balance) => ({
           amount: Number(balance.balance_amount.amount),
           currency: balance.balance_amount.currency,
@@ -190,6 +196,16 @@ async function executeTool(
   }
 
   return toolError(`Unknown tool: ${name}`);
+}
+
+export function safeAccountType(value: unknown): string | null {
+  return typeof value === "string" && ["CACC", "CASH", "CARD", "LOAN", "SVGS", "OTHR"].includes(value)
+    ? value
+    : null;
+}
+
+export function safeAccountCurrency(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Z]{3}$/.test(value) ? value : null;
 }
 
 function tool(
