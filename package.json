@@ -7,24 +7,31 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "smoke:mcp": "tsx scripts/smoke-mcp.ts",
+    "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@actual-app/api": "^26.5.0",
-    "dotenv": "^17.4.2",
-    "next": "16.2.4",
+    "@clerk/nextjs": "^7.7.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@neondatabase/serverless": "^1.1.0",
+    "jose": "^6.2.8",
+    "next": "^16.3.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "tsx": "^4.21.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@actual-app/api": "^26.5.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4",
+    "eslint-config-next": "^16.3.0",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

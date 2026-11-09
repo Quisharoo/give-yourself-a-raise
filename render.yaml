@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: give-yourself-a-raise
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- --port $PORT
+    healthCheckPath: /.well-known/oauth-protected-resource
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_BASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: BANK_CONNECTION_ENCRYPTION_KEY
+        sync: false
+      - key: ENABLE_BANKING_APPLICATION_ID
+        sync: false
+      - key: ENABLE_BANKING_PRIVATE_KEY_PEM
+        sync: false

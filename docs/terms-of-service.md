@@ -1,6 +1,6 @@
 # Terms of Service
 
-Last updated: April 17, 2026
+Last updated: August 9, 2026
 
 Give Yourself a Raise is an early-stage personal finance dashboard intended for personal use and testing.
 

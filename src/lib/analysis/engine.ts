@@ -13,6 +13,7 @@ import type {
   FlowKind,
   PatternKind,
   SpendingAnalysis,
+  SpendingTransaction,
   TransactionClassification,
 } from "@/lib/analysis/types";
 
@@ -44,11 +45,15 @@ interface MerchantAggregate {
   transactions: NormalizedTransaction[];
 }
 
-const ANALYSIS_WINDOW_DAYS = 90;
+const DEFAULT_ANALYSIS_WINDOW_DAYS = 90;
 const BRIEF_TARGET_RATIO = 0.1;
 const ONE_OFF_THRESHOLD = 100;
 
-export function analyzeSpending(accounts: EnableBankingAccountSnapshot[]): SpendingAnalysis {
+export function analyzeSpending(
+  accounts: EnableBankingAccountSnapshot[],
+  options: { windowDays?: number } = {},
+): SpendingAnalysis {
+  const windowDays = normalizeWindowDays(options.windowDays);
   const normalized = accounts.flatMap((account) =>
     account.transactions.map((transaction) => normalizeTransaction(account.accountId, transaction)),
   );
@@ -72,7 +77,7 @@ export function analyzeSpending(accounts: EnableBankingAccountSnapshot[]): Spend
   const primaryFixedCost = fixedCost.filter((transaction) => transaction.currency === primaryCurrency);
   const primaryUncertain = uncertain.filter((transaction) => transaction.currency === primaryCurrency);
 
-  const merchantAggregates = buildMerchantAggregates(primaryBehavioural);
+  const merchantAggregates = buildMerchantAggregates(primaryBehavioural, windowDays);
   const excludedOneOffTransactions = merchantAggregates
     .filter((aggregate) => shouldExcludeAggregateFromLeverMath(aggregate))
     .reduce((total, aggregate) => total + aggregate.count, 0);
@@ -104,7 +109,7 @@ export function analyzeSpending(accounts: EnableBankingAccountSnapshot[]): Spend
       uncertainTransactions: uncertain.length,
       wealthFlowTransactions: wealthFlow.length,
     },
-    fixedCostContext: buildFixedCostContext(primaryFixedCost),
+    fixedCostContext: buildFixedCostContext(primaryFixedCost, windowDays),
     generatedAt: new Date().toISOString(),
     habitMerchants: recurringAggregates
       .filter((aggregate) => aggregate.pattern === "habit")
@@ -131,8 +136,28 @@ export function analyzeSpending(accounts: EnableBankingAccountSnapshot[]): Spend
         sampleAmount: roundCurrency(aggregate.sampleAmount),
       })),
     topLevers,
-    uncertainSpend: buildUncertainSpend(primaryUncertain),
+    uncertainSpend: buildUncertainSpend(primaryUncertain, windowDays),
   };
+}
+
+export function getSpendingTransactions(
+  accounts: EnableBankingAccountSnapshot[],
+): SpendingTransaction[] {
+  return accounts
+    .flatMap((account) =>
+      account.transactions.map((transaction) => normalizeTransaction(account.accountId, transaction)),
+    )
+    .map((transaction) => ({
+      amount: roundCurrency(transaction.signedAmount),
+      categoryKey: transaction.classification.categoryKey,
+      categoryLabel: CATEGORY_LABELS[transaction.classification.categoryKey],
+      confidence: transaction.classification.confidence,
+      currency: transaction.currency,
+      date: transaction.date,
+      flowKind: transaction.classification.flowKind,
+      merchant: transaction.merchant,
+    }))
+    .sort((left, right) => right.date.localeCompare(left.date));
 }
 
 function buildBaseline(aggregates: MerchantAggregate[], currency: string) {
@@ -148,7 +173,7 @@ function buildBaseline(aggregates: MerchantAggregate[], currency: string) {
   };
 }
 
-function buildFixedCostContext(transactions: NormalizedTransaction[]) {
+function buildFixedCostContext(transactions: NormalizedTransaction[], windowDays: number) {
   const byCategory = new Map<CategoryKey, { merchantExamples: Set<string>; monthlySpend: number }>();
 
   for (const transaction of transactions) {
@@ -157,7 +182,7 @@ function buildFixedCostContext(transactions: NormalizedTransaction[]) {
       monthlySpend: 0,
     };
 
-    current.monthlySpend += monthlyEquivalent(transaction.absAmount);
+    current.monthlySpend += monthlyEquivalent(transaction.absAmount, windowDays);
     current.merchantExamples.add(transaction.merchant);
     byCategory.set(transaction.classification.categoryKey, current);
   }
@@ -173,7 +198,10 @@ function buildFixedCostContext(transactions: NormalizedTransaction[]) {
     .slice(0, 6);
 }
 
-function buildMerchantAggregates(transactions: NormalizedTransaction[]): MerchantAggregate[] {
+function buildMerchantAggregates(
+  transactions: NormalizedTransaction[],
+  windowDays: number,
+): MerchantAggregate[] {
   const groups = new Map<string, NormalizedTransaction[]>();
 
   for (const transaction of transactions) {
@@ -201,7 +229,7 @@ function buildMerchantAggregates(transactions: NormalizedTransaction[]): Merchan
       currency: sorted[0].currency,
       family: classification.merchantFamily,
       label: sorted[0].merchant,
-      monthlySpend: monthlyEquivalent(totalSpend),
+      monthlySpend: monthlyEquivalent(totalSpend, windowDays),
       pattern,
       reason: classification.reason,
       sampleAmount: sorted[0].absAmount,
@@ -262,7 +290,7 @@ function buildTopLevers(aggregates: MerchantAggregate[], raiseTarget: number) {
     .slice(0, 3);
 }
 
-function buildUncertainSpend(transactions: NormalizedTransaction[]) {
+function buildUncertainSpend(transactions: NormalizedTransaction[], windowDays: number) {
   const groups = new Map<string, NormalizedTransaction[]>();
 
   for (const transaction of transactions) {
@@ -276,7 +304,7 @@ function buildUncertainSpend(transactions: NormalizedTransaction[]) {
     .map((group) => ({
       label: group[0].merchant,
       merchantFamily: group[0].classification.merchantFamily,
-      monthlySpend: roundCurrency(monthlyEquivalent(group.reduce((total, transaction) => total + transaction.absAmount, 0))),
+      monthlySpend: roundCurrency(monthlyEquivalent(group.reduce((total, transaction) => total + transaction.absAmount, 0), windowDays)),
       reason: group[0].classification.reason,
       transactionCount: group.length,
     }))
@@ -567,8 +595,20 @@ function containsAny(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
-function monthlyEquivalent(amount: number) {
-  return (amount / ANALYSIS_WINDOW_DAYS) * 30;
+function monthlyEquivalent(amount: number, windowDays: number) {
+  return (amount / windowDays) * 30;
+}
+
+function normalizeWindowDays(value: number | undefined) {
+  if (value === undefined) {
+    return DEFAULT_ANALYSIS_WINDOW_DAYS;
+  }
+
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("Analysis window must be a positive number of days.");
+  }
+
+  return value;
 }
 
 function normalizeText(value: string) {
