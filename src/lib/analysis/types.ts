@@ -118,3 +118,14 @@ export interface SpendingAnalysis {
   topLevers: AnalysisLever[];
   uncertainSpend: UncertainSpendItem[];
 }
+
+export interface SpendingTransaction {
+  amount: number;
+  categoryKey: CategoryKey;
+  categoryLabel: string;
+  confidence: Confidence;
+  currency: string;
+  date: string;
+  flowKind: FlowKind;
+  merchant: string;
+}

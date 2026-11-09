@@ -210,6 +210,12 @@ export async function getSession(sessionId: string): Promise<EnableBankingSessio
   return enableBankingRequest<EnableBankingSession>(`/sessions/${sessionId}`);
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  await enableBankingRequest<unknown>(`/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getAccountBalances(accountId: string, psuHeaders?: PsuHeaders) {
   const response = await enableBankingRequest<EnableBankingBalancesResponse>(
     `/accounts/${accountId}/balances`,

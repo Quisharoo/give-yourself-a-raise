@@ -12,6 +12,15 @@ test("allows the auth routes", () => {
   assert.equal(isPublicPath("/api/auth/logout"), true);
 });
 
+test("allows ChatGPT OAuth discovery and legal routes", () => {
+  assert.equal(isPublicPath("/auth/login"), true);
+  assert.equal(isPublicPath("/mcp"), true);
+  assert.equal(isPublicPath("/.well-known/oauth-protected-resource"), true);
+  assert.equal(isPublicPath("/.well-known/oauth-authorization-server"), true);
+  assert.equal(isPublicPath("/privacy"), true);
+  assert.equal(isPublicPath("/terms"), true);
+});
+
 test("allows the enable banking callback route", () => {
   assert.equal(isPublicPath("/api/enable-banking/callback"), true);
 });

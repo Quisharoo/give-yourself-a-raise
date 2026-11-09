@@ -1,5 +1,8 @@
+import { SignInButton } from "@clerk/nextjs";
+
 import { hasAuthConfig } from "@/lib/auth/session";
 import { getSafeNextPath } from "@/lib/auth/paths";
+import { hasClerkConfig } from "@/lib/auth/clerk";
 
 type LoginSearchParams = Promise<{
   error?: string | string[];
@@ -15,6 +18,7 @@ export default async function LoginPage({
   const error = firstValue(resolvedSearchParams.error);
   const next = getSafeNextPath(firstValue(resolvedSearchParams.next));
   const isConfigured = hasAuthConfig();
+  const clerkConfigured = hasClerkConfig();
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-1 flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
@@ -30,7 +34,15 @@ export default async function LoginPage({
           </p>
         </div>
 
-        {!isConfigured ? (
+        {clerkConfigured ? (
+          <SignInButton forceRedirectUrl={next} mode="modal">
+            <button className="button button-primary w-full sm:w-fit" type="button">
+              Continue securely
+            </button>
+          </SignInButton>
+        ) : null}
+
+        {!clerkConfigured && !isConfigured ? (
           <div className="callout callout-warning">
             Set <span className="font-mono text-xs">APP_LOGIN_PASSWORD</span> and{" "}
             <span className="font-mono text-xs">APP_LOGIN_SECRET</span> to enable the deploy gate.
@@ -45,7 +57,7 @@ export default async function LoginPage({
           <div className="callout callout-warning">Login is not configured on this deployment.</div>
         ) : null}
 
-        <form action="/api/auth/login" className="grid gap-4" method="post">
+        {!clerkConfigured ? <form action="/api/auth/login" className="grid gap-4" method="post">
           <input name="next" type="hidden" value={next} />
 
           <label className="grid gap-2 text-sm font-semibold text-[var(--foreground)]">
@@ -62,7 +74,7 @@ export default async function LoginPage({
           <button className="button button-primary w-full sm:w-fit" disabled={!isConfigured} type="submit">
             Enter app
           </button>
-        </form>
+        </form> : null}
       </section>
     </main>
   );

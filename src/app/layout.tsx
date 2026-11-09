@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { Manrope, Outfit } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
+
+import { hasClerkConfig } from "@/lib/auth/clerk";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -23,12 +26,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const content = hasClerkConfig() ? <ClerkProvider>{children}</ClerkProvider> : children;
+
   return (
     <html
       lang="en"
       className={`${outfit.variable} ${manrope.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">{content}</body>
     </html>
   );
 }

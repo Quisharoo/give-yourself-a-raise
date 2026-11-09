@@ -1,12 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
+import { getWebUserSubject } from "@/lib/auth/web-user";
+import { saveBankConnection } from "@/lib/connections/store";
 import {
   createSession,
+  deleteSession,
   ENABLE_BANKING_SESSION_COOKIE,
   ENABLE_BANKING_STATE_COOKIE,
   extractPsuHeaders,
@@ -27,6 +27,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/?error=State+mismatch", baseUrl));
   }
 
+  const subject = await getWebUserSubject(request);
+
+  if (!subject) {
+    return NextResponse.redirect(
+      new URL("/login?error=session&next=/", baseUrl),
+    );
+  }
+
+  let createdSessionId: string | null = null;
+
   try {
     const session = await createSession(code, extractPsuHeaders(request.headers));
     const sessionId =
@@ -37,17 +47,14 @@ export async function GET(request: NextRequest) {
       throw new Error("Enable Banking did not return a session ID.");
     }
 
-    try {
-      const localDir = join(process.cwd(), ".local");
-      await mkdir(localDir, { recursive: true });
-      await writeFile(
-        join(localDir, "eb-session.json"),
-        `${JSON.stringify({ session_id: sessionId, created_at: new Date().toISOString() }, null, 2)}\n`,
-        "utf8",
-      );
-    } catch (persistError) {
-      console.error("Failed to persist Enable Banking session for bridge", persistError);
-    }
+    createdSessionId = sessionId;
+    await saveBankConnection({
+      consentExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      country: process.env.PRIVATE_PLUGIN_BANK_COUNTRY?.trim() || "IE",
+      provider: "Revolut",
+      sessionId,
+      subject,
+    });
 
     const response = NextResponse.redirect(new URL("/?connected=1", baseUrl));
 
@@ -62,6 +69,12 @@ export async function GET(request: NextRequest) {
 
     return response;
   } catch (error) {
+    if (createdSessionId) {
+      await deleteSession(createdSessionId).catch((cleanupError) => {
+        console.error("Failed to revoke unpersisted Enable Banking session", cleanupError);
+      });
+    }
+
     const message = error instanceof Error ? error.message : "Unable to create session";
     return NextResponse.redirect(
       new URL(`/?error=${encodeURIComponent(message)}`, baseUrl),
