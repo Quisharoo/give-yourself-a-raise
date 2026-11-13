@@ -47,6 +47,7 @@ export interface EnableBankingSessionAccountReference {
 }
 
 export interface EnableBankingSession {
+  access?: { valid_until?: unknown };
   accounts: Array<EnableBankingSessionAccountReference | string>;
   session_id?: string;
   [key: string]: unknown;

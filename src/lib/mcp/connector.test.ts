@@ -157,7 +157,9 @@ test("hosted MCP authorizes only the owner while preserving bearer-only connecto
         "find_transactions",
         "get_account_summary",
         "get_connection_status",
+        "get_recurring_transactions",
         "get_transaction_totals",
+        "list_classification_rules",
         "summarize_spending",
       ]);
       for (const tool of tools) {

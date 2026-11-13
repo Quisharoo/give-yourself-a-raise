@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 
 import { getWebUserSubject } from "@/lib/auth/web-user";
 import { getBankConnection } from "@/lib/connections/store";
+import { listFinancialRules } from "@/lib/analysis/rule-store";
+import { dateRange } from "@/lib/mcp/transaction-query";
 import { analyzeSpending } from "@/lib/analysis/engine";
 import {
   EnableBankingError,
@@ -43,7 +45,8 @@ export async function GET(request: NextRequest) {
       extractPsuHeaders(request.headers),
     );
 
-    const analysis = analyzeSpending(overview.accounts);
+    const range = dateRange(dateFrom, dateTo);
+    const analysis = analyzeSpending(overview.accounts, { rules: await listFinancialRules(subject), windowDays: range.windowDays });
 
     await Promise.all([
       writeEnableBankingCapture("analysis-input-overview", {

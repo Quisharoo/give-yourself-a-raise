@@ -54,10 +54,14 @@ This repo is not a budgeting dashboard. The core promise is:
 - `find_transactions`
 - `get_transaction_totals`
 - `compare_spending_periods`
+- `list_classification_rules`
+- `get_recurring_transactions`
 
 Tool results exclude IBANs, bank account IDs, raw provider payloads, and Enable Banking session IDs.
 
-`get_account_summary` returns an opaque `account_ref` for each account. `find_transactions`, `get_transaction_totals`, `summarize_spending`, and `compare_spending_periods` accept an optional nonempty `account_refs` array. Omit it to include all linked accounts. References belong to the authenticated user and current bank consent. Unknown references fail before account data is fetched.
+`get_account_summary` returns an opaque `account_ref` for each account. Search, totals, spending summaries, comparisons, and recurring reports accept an optional nonempty `account_refs` array. Omit it to include all linked accounts. References belong to the authenticated user and current bank consent. Unknown references fail before account data is fetched.
+
+`get_connection_status` reads the provider's actual consent expiry and warns within seven days. Expired consent returns a clear reconnect error. Bank reads report persisted per-account transaction and balance fetch outcomes, including the last successful fetch, requested dates, and latest observed transaction dates. A failed fetch preserves the previous success and never becomes a successful empty history. Fetch time does not guarantee that the bank has published every recent transaction.
 
 For example, `find_transactions` accepts the following arguments. Replace the reference with one from `get_account_summary`.
 
@@ -75,19 +79,27 @@ For example, `find_transactions` accepts the following arguments. Replace the re
 
 Search and totals share date, merchant, category, absolute `min_amount`, absolute `max_amount`, account, and status filters. Amount bounds accept numbers or exact decimal strings. Dates must be real calendar dates, ordered, and at most 366 days apart. Dates default to the last 30 days.
 
-`find_transactions` returns at most 50 rows per page, with a default of 20. Pass `next_cursor` as `cursor` for the next page. Other filters may be omitted or repeated unchanged. Cursors freeze default dates, expire 15 minutes after the first page, and bind the query to the user and bank session. Every continuation refetches the bank data. A changed result requires restarting the search. Duplicate-looking rows remain separate and receive opaque `transaction_ref` values. Provider `transaction_id` is not treated as a stable identity.
+`find_transactions` requests up to 50 rows by default. A 12,000-byte row budget can return fewer complete rows, indicated by `page_limited_by_size`. Pass `next_cursor` as `cursor` for the next page. Other filters may be omitted or repeated unchanged. Cursors freeze default dates, expire 15 minutes after the first page, and bind the query to the user and bank session. Every continuation refetches the bank data. Changed rows or rules require restarting the search. Duplicate-looking rows remain separate and receive opaque `transaction_ref` values. Classification changes do not change those references.
 
-`get_transaction_totals` accepts the same filters without `limit` or `cursor` and returns no transaction rows. Both tools calculate totals across every matching bank-returned row before pagination. Each currency has decimal-string `debit`, `credit`, and signed `net` totals. Debit and credit are magnitudes. No currencies are combined. A row's signed `amount_decimal` is authoritative; `provider_amount_decimal` preserves the bank's original decimal text. Numeric `amount` remains for compatibility and can lose precision. Direction comes from `CRDT` or `DBIT`, independently of the provider amount's sign. Malformed amounts or directions fail with a safe error.
+`get_transaction_totals` accepts the same filters without `limit`, `detail`, or `cursor` and returns no transaction rows. Both tools calculate totals across every matching bank-returned row before pagination. Each currency has decimal-string `debit`, `credit`, and signed `net` totals. Debit and credit are magnitudes. No currencies are combined. Balance and transaction `amount_decimal` strings are authoritative; lossy numeric amount fields are omitted. Full transaction detail includes `provider_amount_decimal` and a bounded raw descriptor alongside the canonical merchant. Direction comes from `CRDT` or `DBIT`, independently of the provider amount's sign. Malformed amounts or directions fail with a safe error.
+
+Purpose, project, economic flow, and currency filters apply consistently across financial tools. Exact `classified_totals` separate expenses, income, revenue, refunds, transfers, and unknown movements. Raw debit/credit/net totals retain transfers for reconciliation. Summaries and each comparison period include the same exact period totals alongside their monthly estimates.
+
+`list_classification_rules` exposes persisted rules for the authenticated owner. The initial Apple, Join Brands, Amazon, and Apple Distribution preferences are data records, separate from merchant aliases and general flow classification. Idempotent seeding preserves stored edits. Rules survive reconnects; fetch metadata belongs to its connection generation. Rule mutation is not exposed under the read-only OAuth scope. See [the financial contract](docs/mcp-financial-contract.md) for the exact defaults.
+
+`get_recurring_transactions` estimates cadence, the next charge date, and observed amount changes from booked expenses. It bounds output with `limit` and `offset`. An overdue-not-observed candidate requires successful request-local coverage through the evaluation date. Historical reads cannot borrow another request's freshness. Missing or ambiguous evidence stays explicit. Bank-history completeness remains unknown.
 
 These are exact sums of available bank-returned rows. They do not guarantee complete bank history or reconcile a card balance. The provider client follows continuation pages, including empty pages, and rejects repeated continuation keys.
 
 Search and totals default to `BOOK`. Supported bank statuses are `BOOK`, `CNCL`, `HOLD`, `OTHR`, `PDNG`, `RJCT`, and `SCHD`. Missing or unrecognized status becomes local `UNKNOWN`, never booked. Explicit bank codes are forwarded to the provider and enforced locally. `all` and `UNKNOWN` omit the provider status filter. `all` includes available returned statuses, with `status_counts` and `totals_by_status` so pending amounts remain distinguishable from settled amounts.
 
-Rows include `status`, `zero_amount`, and `event_kind`. Zero amount does not establish an authorization, and a credit does not establish a refund. Only self-describing refund or reversal bank codes produce those event hints. Other codes remain `unknown`; live provider code availability is unverified.
+Compact rows include `status`, economic flow, purpose, and project. Full detail also includes `zero_amount`, `event_kind`, and classification evidence. Zero amount does not establish an authorization, and a credit does not establish a refund. Only self-describing refund or reversal bank codes produce those event hints. Other codes remain `unknown`; live provider code availability is unverified.
 
 Monthly summaries and comparisons use only `BOOK` rows and expose counts of excluded statuses. Existing monthly fields remain projections and carry an estimate label. They are separate from exact period totals.
 
 Account references, transaction references, and cursors use purpose-separated HMAC-SHA256 signatures. The server-only bank session ID is the signing key and the authenticated subject is part of the signed input. A new bank consent invalidates old references and cursors. No additional environment secret or stored transaction snapshot is needed.
+
+`npm run verify:storage` exercises the application SQL against a private temporary PostgreSQL instance with synthetic data. It requires `initdb`, `pg_ctl`, and `psql` on PATH, opens no TCP listener, and removes its own fixture afterward. It checks migration, persistence, concurrent reconnects, attempt ordering, owner isolation, and rule seeding. It does not use production database credentials.
 
 ## Analysis Rules
 

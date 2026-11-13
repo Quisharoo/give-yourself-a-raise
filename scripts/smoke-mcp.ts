@@ -1,3 +1,4 @@
+import { syntheticPersistence } from "../src/lib/mcp/fixtures";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -9,10 +10,12 @@ import {
 const endpoint = "http://localhost:3000/mcp";
 const range = { date_from: "2026-01-01", date_to: "2026-02-01" };
 const dependencies: McpBankDependencies = {
+  ...syntheticPersistence(),
   getBankConnection: async (subject) => ({
     subject,
     sessionId: "synthetic-server-session",
-    connectedAt: "2026-01-01",
+    connectionId: "synthetic-generation",
+            connectedAt: "2026-01-01",
     consentExpiresAt: null,
     country: "IE",
     provider: "Synthetic",
@@ -53,7 +56,7 @@ async function main() {
       }),
     )
     .parse(listed.tools);
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 8);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   assert.equal(tools[0].securitySchemes[0].scopes[0], "read:bank_data");
   const summary = await call("get_account_summary", range);

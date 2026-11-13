@@ -38,7 +38,12 @@ function run(
   args: Record<string, unknown> = {},
   now?: number,
 ) {
-  const request = readTransactionQuery({ ...range, ...args }, scope, true, now);
+  const request = readTransactionQuery(
+    { ...range, detail: "full", ...args },
+    scope,
+    true,
+    now,
+  );
   return transactionResult(
     queryTransactions(account(transactions), request.query, scope),
     request,
@@ -68,6 +73,29 @@ test("traverses 738 rows without omissions through deterministic cursors even wh
   assert.equal(new Set(rows.map((row) => row.transaction_ref)).size, 738);
   assert.equal(result.truncated, false);
   assert.equal(JSON.stringify(rows).includes("private-"), false);
+});
+
+test("byte-limited pages retain complete records, whole-result totals and traversable cursors", () => {
+  const transactions = Array.from({ length: 85 }, (_, index) =>
+    transaction(index, {
+      creditor: { name: `Merchant ${index} ${"long ".repeat(30)}` },
+    }),
+  );
+  let result = run(transactions, { limit: 50, detail: "compact" });
+  assert.equal(result.page_limited_by_size, true);
+  assert.ok(result.transactions!.length < 50);
+  const refs = new Set<string>();
+  do {
+    assert.ok(Buffer.byteLength(JSON.stringify(result.transactions)) <= 12_000);
+    assert.equal(result.totals[0].debit, "8.50");
+    for (const row of result.transactions!) refs.add(row.transaction_ref);
+    if (!result.next_cursor) break;
+    result = run(transactions, {
+      cursor: result.next_cursor,
+      detail: "compact",
+    });
+  } while (true);
+  assert.equal(refs.size, 85);
 });
 
 test("exact decimal sums preserve precision, currency and direction independently of provider sign", () => {
@@ -307,7 +335,13 @@ test("zero amount is only a flag, and only self-describing bank codes hint refun
   const result = run(rows).transactions!;
   assert.equal(result.filter((row) => row.zero_amount).length, 1);
   assert.equal(result.find((row) => row.zero_amount)!.event_kind, "unknown");
-  assert.equal(result.find((row) => row.amount > 0)!.event_kind, "unknown");
+  assert.equal(
+    result.find(
+      (row) =>
+        !row.amount_decimal.startsWith("-") && row.amount_decimal !== "0.00",
+    )!.event_kind,
+    "unknown",
+  );
   assert.equal(result.filter((row) => row.event_kind === "refund").length, 1);
   assert.equal(result.filter((row) => row.event_kind === "reversal").length, 1);
 });
