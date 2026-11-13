@@ -353,7 +353,14 @@ export async function readBankAccounts(
       };
     }),
   );
-  const dataStatus = await deps.getAccountFetchObservations(connection);
+  const selectedRefs = new Set(
+    selected.map((account) => accountRef(scope, account.uid)),
+  );
+  const dataStatus = (await deps.getAccountFetchObservations(connection)).filter(
+    (observation) =>
+      selectedRefs.has(observation.account_ref) &&
+      (balances || observation.resource === "transactions"),
+  );
   await assertCurrentConnection(connection, deps);
   const failures = outcomes.filter((outcome) => outcome.status === "rejected");
   if (failures.length) {

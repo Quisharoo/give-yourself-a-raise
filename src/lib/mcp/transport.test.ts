@@ -425,10 +425,14 @@ test("MCP persists independent account/resource outcomes, preserves prior succes
   assert.equal(emptyTx.last_success!.latest_booked_transaction_date, null);
   assert.deepEqual(
     after.filter((row) => row.resource === "balances"),
-    old.filter((row) => row.resource === "balances"),
+    [],
   );
   const beforeStatus = await dependencies.getAccountFetchObservations(
     (await dependencies.getBankConnection("owner"))!,
+  );
+  assert.deepEqual(
+    schema.parse(beforeStatus).filter((row) => row.resource === "balances"),
+    old.filter((row) => row.resource === "balances"),
   );
   dependencies.getAllAccountTransactions = async () => {
     throw new Error("Status must not fetch transactions");
@@ -562,7 +566,7 @@ test("MCP summary and search accept nullable provider dates with exact values an
         }),
       )
       .parse(output.data_status);
-    assert.equal(statuses.length, 2);
+    assert.equal(statuses.length, output === summary ? 2 : 1);
     assert.deepEqual(
       statuses.find((row) => row.resource === "transactions")?.last_success,
       {
@@ -576,7 +580,7 @@ test("MCP summary and search accept nullable provider dates with exact values an
     assert.equal(
       statuses.find((row) => row.resource === "balances")?.last_success
         .returned_count,
-      1,
+      output === summary ? 1 : undefined,
     );
   }
 });
@@ -1160,6 +1164,91 @@ test("classification writes enforce their scope before storage and work without 
     content(await call(dependencies, "list_classification_rules", {})),
     { rules: [], overrides: [] },
   );
+});
+
+test("MCP excludes persisted legacy observations from bounded transaction results and current connection status", async (t) => {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 37).toString("base64");
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
+  });
+  const { dependencies } = syntheticBank();
+  dependencies.getSession = async () => ({
+    accounts: ["account-one", "account-two", "account-three", "account-four"],
+  });
+  const getObservations = dependencies.getAccountFetchObservations;
+  dependencies.getAccountFetchObservations = async (connection) =>
+    (await getObservations(connection)).map((row) => ({
+      ...row,
+      broad_success: row.last_success,
+    }));
+  await call(dependencies, "get_account_summary", range);
+  const connection = await dependencies.getBankConnection("owner");
+  assert.ok(connection);
+  const legacy = await dependencies.getAccountFetchObservations(connection);
+  assert.equal(legacy.length, 8);
+  dependencies.getAccountDetails = async (accountId) => ({
+    identification_hash: `stable-${accountId}`,
+    currency: "EUR",
+    cash_account_type: "CARD",
+  });
+  await dependencies.upsertFinancialRule("owner", {
+    id: "fixture-business",
+    priority: 100,
+    merchant_text: "Coffee kiosk",
+    direction: "debit",
+    except_amount: null,
+    purpose: "business",
+    project: "INCREMNT",
+    flow_kind: "expense",
+  });
+  const result = await call(dependencies, "find_transactions", {
+    ...range,
+    purpose: "business",
+    project: "INCREMNT",
+    flow_kind: "expense",
+    limit: 1,
+  });
+  const output = content(result);
+  assert.equal(output.error, undefined);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 16_000);
+  assert.equal(output.matched_count, 236);
+  assert.deepEqual(output.totals, [
+    { currency: "EUR", count: 236, debit: "23.60", credit: "0", net: "-23.60" },
+  ]);
+  assert.equal(z.array(z.unknown()).parse(output.transactions).length, 1);
+  assert.equal(z.object({ matched_count: z.number() }).parse(output.pending).matched_count, 4);
+  const observations = z.array(z.object({ account_ref: z.string(), resource: z.string() }));
+  const current = observations.parse(output.data_status);
+  assert.equal(current.length, 4);
+  assert.ok(current.every((row) => row.resource === "transactions"));
+  assert.ok(current.every((row) => !legacy.some((old) => old.account_ref === row.account_ref)));
+  const persisted = await dependencies.getAccountFetchObservations(connection);
+  assert.equal(persisted.length, 12);
+  assert.deepEqual(persisted.slice(0, legacy.length), legacy);
+  const status = content(await call(dependencies, "get_connection_status", {}));
+  assert.deepEqual(status.data_status, output.data_status);
+  const selected = content(await call(dependencies, "find_transactions", {
+    ...range,
+    account_refs: [current[0].account_ref],
+    limit: 1,
+  }));
+  assert.deepEqual(
+    observations.parse(selected.data_status).map((row) => [row.account_ref, row.resource]),
+    [[current[0].account_ref, "transactions"]],
+  );
+  const summary = content(await call(dependencies, "get_account_summary", range));
+  assert.equal(observations.parse(summary.data_status).length, 8);
+  const withBalances = content(await call(dependencies, "get_connection_status", {}));
+  assert.deepEqual(withBalances.data_status, summary.data_status);
+  dependencies.getSession = async () => ({
+    accounts: ["account-one", "account-two", "account-three", "account-four"],
+    access: { valid_until: "2020-01-01T00:00:00Z" },
+  });
+  const expired = await call(dependencies, "get_transaction_totals", range);
+  assert.equal(expired.isError, true);
+  assert.deepEqual(content(expired).data_status, withBalances.data_status);
 });
 
 test("strong references and overrides survive reconnects, with complete compact MCP results bounded", async () => {
