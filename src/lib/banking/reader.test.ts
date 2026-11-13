@@ -4,6 +4,8 @@ import {
   BankReadError,
   consentStatus,
   readBankAccounts,
+  validateBalances,
+  validateTransactions,
   type BankDependencies,
 } from "./reader";
 import { detectRecurring } from "../analysis/recurring";
@@ -11,6 +13,7 @@ import type { BankConnection } from "../connections/store";
 import type { EnableBankingTransaction } from "../enable-banking/types";
 import { syntheticPersistence } from "../mcp/fixtures";
 import { accountRef } from "../mcp/transaction-query";
+import { TransactionInputError } from "../transactions";
 const now = Date.parse("2026-11-13T00:00:00Z");
 test("seven-day consent warning boundaries distinguish unknown, expiring, active and expired", () => {
   assert.equal(consentStatus(null, now).state, "unknown");
@@ -67,6 +70,82 @@ function dependencies(): BankDependencies {
     getAllAccountTransactions: async () => charges(),
   };
 }
+test("bank dates accept null as absent while requiring a transaction date", () => {
+  const transaction = charges()[0];
+  for (const field of ["booking_date", "value_date", "transaction_date"] as const) {
+    assert.doesNotThrow(() =>
+      validateTransactions([
+        {
+          ...transaction,
+          booking_date: null,
+          value_date: null,
+          transaction_date: null,
+          [field]: "2026-08-01",
+        },
+      ]),
+    );
+  }
+  for (const absent of [undefined, null]) {
+    assert.throws(
+      () =>
+        validateTransactions([
+          {
+            ...transaction,
+            booking_date: absent,
+            value_date: absent,
+            transaction_date: absent,
+          },
+        ]),
+      TransactionInputError,
+    );
+    assert.doesNotThrow(() =>
+      validateBalances([
+        {
+          balance_amount: { amount: "10.00", currency: "EUR" },
+          reference_date: absent,
+          last_change_date_time: absent,
+        },
+      ]),
+    );
+  }
+});
+test("malformed non-null optional bank dates remain invalid", () => {
+  for (const invalid of ["", "not-a-date", "2026-02-30"]) {
+    for (const field of ["booking_date", "value_date", "transaction_date"] as const) {
+      assert.throws(
+        () =>
+          validateTransactions([
+            { ...charges()[0], value_date: "2026-08-01", [field]: invalid },
+          ]),
+        TransactionInputError,
+      );
+    }
+    assert.throws(
+      () =>
+        validateBalances([
+          {
+            balance_amount: { amount: "10.00", currency: "EUR" },
+            reference_date: invalid,
+            last_change_date_time: null,
+          },
+        ]),
+      TransactionInputError,
+    );
+  }
+  for (const invalid of ["", "not-a-timestamp"]) {
+    assert.throws(
+      () =>
+        validateBalances([
+          {
+            balance_amount: { amount: "10.00", currency: "EUR" },
+            reference_date: null,
+            last_change_date_time: invalid,
+          },
+        ]),
+      TransactionInputError,
+    );
+  }
+});
 for (const concurrentResult of ["success", "failed"] as const)
   test(`successful request keeps its own coverage after a newer historical fetch ${concurrentResult}`, async (t) => {
     t.mock.timers.enable({ apis: ["Date"], now: new Date(now) });
