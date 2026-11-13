@@ -1,11 +1,12 @@
+import { stableRef } from "@/lib/transactions-identity";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import {
-  normalizeTransaction,
+  normalizeAccountTransactions,
   financialFilterShape,
   matchesFinancialFilter,
-  type FinancialRule,
+  type ClassificationInput,
 } from "@/lib/analysis/classification";
 import { CATEGORY_LABELS } from "@/lib/analysis/rules";
 import type {
@@ -79,6 +80,7 @@ export type TransactionQuery = z.infer<typeof resolvedQuerySchema>;
 export interface QueryScope {
   subject: string;
   sessionId: string;
+  accountIdentities?: Record<string, string>;
 }
 const cursorSchema = z
   .object({
@@ -98,7 +100,10 @@ function sign(scope: QueryScope, purpose: string, value: string) {
 }
 
 export function accountRef(scope: QueryScope, accountId: string) {
-  return `acc_${sign(scope, "account-ref-v1", accountId)}`;
+  const identity = scope.accountIdentities?.[accountId];
+  return identity
+    ? stableRef(scope.subject, "acc", identity)
+    : `acc_${sign(scope, "account-ref-v1", accountId)}`;
 }
 
 export function selectAccounts(
@@ -247,17 +252,19 @@ export function queryTransactions(
   accounts: EnableBankingAccountSnapshot[],
   query: TransactionQuery,
   scope: QueryScope,
-  rules: readonly FinancialRule[] = [],
+  rules: ClassificationInput = [],
 ) {
   const rows = accounts
     .flatMap((account) =>
-      account.transactions.map((transaction) => {
+      normalizeAccountTransactions(
+        {
+          ...account,
+          classificationAccountRef: accountRef(scope, account.accountId),
+        },
+        rules,
+      ).map((classified) => {
+        const transaction = classified.transaction;
         const money = transactionMoney(transaction);
-        const classified = normalizeTransaction(
-          account.accountId,
-          transaction,
-          rules,
-        );
         if (!validCalendarDate(classified.date))
           throw new TransactionInputError(
             "The bank returned an invalid transaction date.",
@@ -272,12 +279,16 @@ export function queryTransactions(
           flow_kind: classified.economicFlow,
           purpose: classified.purpose,
           project: classified.project,
-          classification_source: classified.matchedRuleId
-            ? "user_rule"
-            : classified.classification.source,
-          classification_reason: classified.matchedRuleId
-            ? "Matched a persisted user classification rule."
-            : classified.classification.reason,
+          classification_source: classified.matchedOverride
+            ? "transaction_override"
+            : classified.matchedRuleId
+              ? "user_rule"
+              : classified.classification.source,
+          classification_reason: classified.matchedOverride
+            ? "Matched a persisted one-off transaction override."
+            : classified.matchedRuleId
+              ? "Matched a persisted user classification rule."
+              : classified.classification.reason,
           confidence: classified.classification.confidence,
           matched_rule_id: classified.matchedRuleId,
           raw_descriptor: classified.rawDescriptor,
@@ -288,6 +299,8 @@ export function queryTransactions(
           amount_decimal: formatDecimal(money.signed),
           provider_amount_decimal: transaction.transaction_amount.amount,
           account_ref: accountRef(scope, account.accountId),
+          override_supported: classified.overrideSupported,
+          override_reason: classified.overrideReason,
         };
         const identity = JSON.stringify([classified.sourceKey]);
         return { row, money, identity, classified };
@@ -315,12 +328,14 @@ export function queryTransactions(
         compareText(a.identity, b.identity),
     );
   const occurrences = new Map<string, number>();
-  const transactions = rows.map(({ row, identity }) => {
+  const transactions = rows.map(({ row, identity, classified }) => {
     const occurrence = (occurrences.get(identity) ?? 0) + 1;
     occurrences.set(identity, occurrence);
     return {
       ...row,
-      transaction_ref: `txn_${sign(scope, "transaction-ref-v1", JSON.stringify([identity, occurrence]))}`,
+      transaction_ref:
+        classified.transactionRef ??
+        `txn_${sign(scope, "transaction-ref-v1", JSON.stringify([identity, occurrence]))}`,
     };
   });
   return {
@@ -328,7 +343,9 @@ export function queryTransactions(
     fingerprint: createHash("sha256")
       .update(
         JSON.stringify([
-          [...rules].sort((a, b) => a.id.localeCompare(b.id)),
+          "rules" in rules
+            ? rules
+            : [...rules].sort((a, b) => a.id.localeCompare(b.id)),
           transactions,
         ]),
       )
@@ -436,6 +453,8 @@ export function transactionResult(
     .map((row) => ({
       transaction_ref: row.transaction_ref,
       account_ref: row.account_ref,
+      override_supported: row.override_supported,
+      override_reason: row.override_reason,
       date: row.date,
       amount_decimal: row.amount_decimal,
       currency: row.currency,

@@ -19,6 +19,7 @@ const state = { connected: true, expired: false, fail: false, sessionFail: false
 let bankReads = 0;
 let connectionReads = 0;
 let ruleReads = 0;
+let scopes = ["read:bank_data"];
 const examples: Array<[string, string, string, "CRDT" | "DBIT", string, string, string]> = [
   ["2026-09-09", "Join Brands", "10.10", "DBIT", "CARD_PAYMENT", "EUR", "BOOK"],
   ["2026-10-09", "Join Brands", "10.10", "DBIT", "CARD_PAYMENT", "EUR", "BOOK"],
@@ -70,7 +71,7 @@ const dependencies: McpBankDependencies = {
   getAccountDetails: async (id) => {
     bankReads++;
     if (id === "synthetic-empty-account") throw new Error("Optional details unavailable");
-    return { cash_account_type: "CARD", currency: "EUR" };
+    return { identification_hash: "synthetic-bank-account", cash_account_type: "CARD", currency: "EUR" };
   },
   getAccountBalances: async (id) => {
     bankReads++;
@@ -92,13 +93,15 @@ const records = z.array(record);
 const client = new Client({ name: "local-smoke", version: "1.0.0" });
 
 async function main() {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 41).toString("base64");
   await client.connect(new StreamableHTTPClientTransport(new URL(endpoint), {
     fetch: async (url, init) => {
       const transport = new WebStandardStreamableHTTPServerTransport({
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createMcpServer("smoke-user", "http://localhost:3000", dependencies);
+      const server = createMcpServer("smoke-user", "http://localhost:3000", dependencies, scopes);
       await server.connect(transport);
       try {
         return await transport.handleRequest(new Request(url, init));
@@ -118,15 +121,17 @@ async function main() {
       "compare_spending_periods", "find_transactions", "get_account_summary",
       "get_connection_status", "get_recurring_transactions", "get_transaction_totals",
       "list_classification_rules", "summarize_spending",
-    ]);
+      "upsert_classification_rule", "delete_classification_rule", "set_transaction_override",
+    ].sort());
     for (const tool of tools) {
-      assert.equal(tool.annotations?.readOnlyHint, true);
-      assert.equal(tool.annotations?.destructiveHint, false);
+      const writing = ["upsert_classification_rule", "delete_classification_rule", "set_transaction_override"].includes(tool.name);
+      assert.equal(tool.annotations?.readOnlyHint, !writing);
+      assert.equal(tool.annotations?.destructiveHint, tool.name === "delete_classification_rule");
       assert.equal(tool.annotations?.idempotentHint, true);
       assert.equal(tool.outputSchema?.type, "object");
       assert.equal(z.array(z.unknown()).parse(tool.outputSchema?.anyOf).length, 2);
       const security = z.array(z.object({ scopes: z.array(z.string()) })).parse(tool._meta?.securitySchemes);
-      assert.deepEqual(security[0].scopes, ["read:bank_data"]);
+      assert.deepEqual(security[0].scopes, writing ? ["read:bank_data", "write:classifications"] : ["read:bank_data"]);
     }
     assert.equal(bankReads + connectionReads + ruleReads, 0, "discovery must not read banking state");
 
@@ -233,12 +238,27 @@ async function main() {
       connected: false, connect_url: "http://localhost:3000/",
       message: "Open the connection URL to link your bank.",
     });
-    for (const tool of tools.filter((tool) => tool.name !== "get_connection_status")) {
-      await expectError(tool.name, {}, "not_connected");
+    for (const tool of tools.filter((tool) => !["get_connection_status", "list_classification_rules"].includes(tool.name))) {
+      await expectError(tool.name, {}, tool.annotations?.readOnlyHint ? "not_connected" : "insufficient_scope");
     }
+    const overrideInput = tools.find((tool) => tool.name === "set_transaction_override")?.inputSchema;
+    assert.ok(overrideInput);
+    const validateOverride = new AjvJsonSchemaValidator().getValidator(overrideInput);
+    const labels = { transaction_ref: rows[0].transaction_ref, purpose: "business", project: "One off", flow_kind: "expense" };
+    const clear = { transaction_ref: rows[0].transaction_ref, labels: null };
+    assert.equal(validateOverride(labels).valid, true);
+    assert.equal(validateOverride(clear).valid, true);
+    assert.equal(validateOverride({ ...clear, purpose: "personal" }).valid, false);
+    await expectError("set_transaction_override", clear, "insufficient_scope");
+    scopes = ["read:bank_data", "write:classifications"];
+    assert.deepEqual((await call("set_transaction_override", labels)).override, labels);
+    assert.deepEqual(await call("set_transaction_override", clear), { override: null });
+    assert.deepEqual(await call("set_transaction_override", clear), { override: null });
     console.log(`MCP smoke passed: ${tools.length} SDK-validated output contracts, zero-read discovery, Monday totals/estimates, recurring evidence, paging and structured failures using synthetic bank data`);
   } finally {
     await client.close();
+    if (previousKey === undefined) delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
   }
 }
 

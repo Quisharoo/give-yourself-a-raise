@@ -22,10 +22,10 @@ function row(
   };
 }
 const cases = [
-  ["Apple.com/bill", "9.99", "EUR", "apple", "unassigned", null],
-  ["Apple.com/bill", "9.990", "EUR", "apple", "unassigned", null],
-  ["Apple.com/bill", "9.99", "USD", "apple", "business", null],
-  ["Apple.com/bill", "19.99", "EUR", "apple", "business", null],
+  ["Apple.com/bill", "9.99", "EUR", "apple", "personal", null],
+  ["Apple.com/bill", "9.990", "EUR", "apple", "personal", null],
+  ["Apple.com/bill", "9.99", "USD", "apple", "business", "INCREMNT"],
+  ["Apple.com/bill", "19.99", "EUR", "apple", "business", "INCREMNT"],
   ["Applegreen", "19.99", "EUR", "applegreen", "unassigned", null],
   ["Awx*JoinBrands", "20", "EUR", "join_brands", "business", "INCREMNT"],
   ["Join Brands", "20", "EUR", "join_brands", "business", "INCREMNT"],
@@ -214,7 +214,11 @@ for (const code of ["TOPUP", "CARD_TOPUP", "MONEY_ADDED"]) {
     });
   test(`${code} permits an explicit external flow rule without a merchant-specific branch`, () => {
     const transaction = row(
-      "Independent Marketplace", "15.25", "EUR", "CRDT", code,
+      "Independent Marketplace",
+      "15.25",
+      "EUR",
+      "CRDT",
+      code,
     );
     const before = normalizeTransaction("a", transaction);
     for (const flow_kind of ["revenue", "income"] as const) {
@@ -229,7 +233,11 @@ for (const code of ["TOPUP", "CARD_TOPUP", "MONEY_ADDED"]) {
   for (const direction of ["DBIT", "CRDT"] as const)
     test(`${code} ${direction} without an explicit flow rule remains a heuristic transfer`, () => {
       const transaction = row(
-        "Independent Marketplace", "15.25", "EUR", direction, code,
+        "Independent Marketplace",
+        "15.25",
+        "EUR",
+        direction,
+        code,
       );
       for (const rules of [
         [],
@@ -257,12 +265,19 @@ for (const code of ["EXCHANGE", "OWN_ACCOUNT", "INTERNAL_TRANSFER", "SAVINGS"])
   });
 
 for (const descriptor of [
-  "To EUR", "From Instant Access Savings", "Card top-up", "Own account transfer",
+  "To EUR",
+  "From Instant Access Savings",
+  "Card top-up",
+  "Own account transfer",
 ])
   for (const field of ["note", "remittance_information"] as const)
     test(`confirmed ${field} ${descriptor} protects TOPUP from an external revenue rule`, () => {
       const transaction = row(
-        "Independent Marketplace", "15.25", "EUR", "CRDT", "TOPUP",
+        "Independent Marketplace",
+        "15.25",
+        "EUR",
+        "CRDT",
+        "TOPUP",
       );
       if (field === "note") transaction.note = descriptor;
       else transaction.remittance_information = [descriptor];
@@ -270,3 +285,227 @@ for (const descriptor of [
       assert.equal(result.matchedRuleId, externalRule.id);
       assert.equal(result.economicFlow, "transfer");
     });
+
+test("seeded aliases keep owner labels separate from canonical merchant names", () => {
+  for (const [descriptor, merchant] of [
+    ["Openai *chatgpt Subscr", "ChatGPT"],
+    ["OpenRouter", "OpenRouter"],
+    ["Render.com", "Render"],
+    ["Register365", "Register365"],
+    ["Hetzner", "Hetzner"],
+    ["Vercel Mkt Upstash", "Upstash"],
+    ["Vercel", "Vercel"],
+    ["Cursor", "Cursor"],
+    ["Lovable", "Lovable"],
+    ["Intellectual Property Off", "Intellectual Property Office"],
+    ["Companies Registration Of", "Companies Registration Office"],
+  ]) {
+    const unlabeled = normalizeTransaction("account", row(descriptor));
+    assert.equal(unlabeled.merchant, merchant);
+    assert.equal(unlabeled.purpose, "unassigned");
+    const labeled = normalizeTransaction(
+      "account",
+      row(descriptor),
+      INITIAL_OWNER_RULES,
+    );
+    assert.equal(labeled.purpose, "business");
+    assert.equal(labeled.project, "INCREMNT");
+    assert.equal(labeled.economicFlow, "expense");
+  }
+  assert.equal(
+    normalizeTransaction(
+      "account",
+      row("apple.com/bill", "0"),
+      INITIAL_OWNER_RULES,
+    ).purpose,
+    "unassigned",
+  );
+  assert.equal(
+    normalizeTransaction("account", row("Amazon Prime"), INITIAL_OWNER_RULES)
+      .matchedRuleId,
+    "owner-amazon-prime",
+  );
+  for (const descriptor of [
+    "Wl*google Google Play A",
+    "Exchanged to USD",
+    "Kevin Byrne",
+    "Paul Michael McCarthy",
+  ])
+    assert.equal(
+      normalizeTransaction("account", row(descriptor), INITIAL_OWNER_RULES)
+        .purpose,
+      "personal",
+    );
+});
+
+test("literal merchant rules honor exact amount, direction, account, priority and zero constraints", async () => {
+  const { financialRuleSchema } = await import("./classification");
+  const rule = financialRuleSchema.parse({
+    id: "one-merchant",
+    priority: 200,
+    merchant_text: "*chatgpt",
+    direction: "debit",
+    except_amount: null,
+    exact_amount: { currency: "EUR", amount: "10.00" },
+    zero_amount: false,
+    purpose: "personal",
+    project: null,
+    flow_kind: "expense",
+  });
+  assert.equal(
+    normalizeTransaction("account", row("Openai *chatgpt Subscr"), [rule])
+      .purpose,
+    "personal",
+  );
+  assert.equal(
+    normalizeTransaction("account", row("Openai chatgpt Subscr"), [rule])
+      .purpose,
+    "unassigned",
+  );
+  assert.equal(
+    normalizeTransaction(
+      "account",
+      row("Openai *chatgpt Subscr", "10", "USD"),
+      [rule],
+    ).purpose,
+    "unassigned",
+  );
+  assert.equal(
+    normalizeTransaction(
+      "account",
+      row("Openai *chatgpt Subscr", "10", "EUR", "CRDT"),
+      [rule],
+    ).purpose,
+    "unassigned",
+  );
+  assert.equal(
+    normalizeTransaction("account", row("Openai *chatgpt Subscr", "0"), [rule])
+      .purpose,
+    "unassigned",
+  );
+  const tied = { ...rule, id: "a-first", purpose: "business" as const };
+  assert.equal(
+    normalizeTransaction("account", row("Openai *chatgpt Subscr"), [rule, tied])
+      .matchedRuleId,
+    "a-first",
+  );
+  assert.equal(
+    financialRuleSchema.safeParse({ ...rule, merchant_text: undefined })
+      .success,
+    false,
+  );
+});
+
+test("one-off overrides protect financial events and ambiguous bank identities", async () => {
+  const { normalizeAccountTransactions } = await import("./classification");
+  const originalKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 19).toString(
+    "base64",
+  );
+  try {
+    const account = {
+      accountId: "rotating-account",
+      stableIdentity: "bank-hash",
+      balances: [],
+      transactions: [{ ...row("Amazon"), entry_reference: "entry-one" }],
+    };
+    const snapshot = {
+      subject: "owner",
+      rules: INITIAL_OWNER_RULES,
+      overrides: [],
+    };
+    const original = normalizeAccountTransactions(account, snapshot)[0];
+    assert(original.transactionRef);
+    assert.equal(original.overrideSupported, true);
+    const labels = {
+      transaction_ref: original.transactionRef,
+      purpose: "business" as const,
+      project: "INCREMNT",
+      flow_kind: "expense" as const,
+    };
+    const input = { ...snapshot, overrides: [labels] };
+    assert.equal(
+      normalizeAccountTransactions(account, input)[0].purpose,
+      "business",
+    );
+    const amazonRule = INITIAL_OWNER_RULES.find((rule) => rule.id === "owner-amazon");
+    assert(amazonRule);
+    const transferRule: FinancialRule = {
+      ...amazonRule,
+      flow_kind: "transfer",
+    };
+    for (const code of ["CARD_PAYMENT", "TOPUP"]) {
+      const overridden = normalizeAccountTransactions(
+        {
+          ...account,
+          transactions: [{ ...account.transactions[0], bank_transaction_code: { code } }],
+        },
+        { ...input, rules: code === "CARD_PAYMENT" ? [transferRule] : [] },
+      )[0];
+      assert.equal(overridden.matchedOverride, true);
+      assert.equal(overridden.economicFlow, "expense");
+      assert.equal(overridden.classification.flowKind, "behavioural_spend");
+    }
+    assert.equal(original.overrideReason, null);
+    const secondOwner = normalizeAccountTransactions(account, {
+      ...input,
+      subject: "another-owner",
+    })[0];
+    assert.notEqual(secondOwner.transactionRef, original.transactionRef);
+    assert.equal(secondOwner.purpose, "personal");
+    const duplicate = normalizeAccountTransactions(
+      {
+        ...account,
+        transactions: [...account.transactions, ...account.transactions],
+      },
+      input,
+    );
+    assert(
+      duplicate.every(
+        (item) => !item.overrideSupported && item.purpose === "personal",
+      ),
+    );
+    for (const code of ["REFUND", "REVERSAL", "INTERNAL_TRANSFER"]) {
+      const transaction = {
+        ...row(
+          "Amazon",
+          "10",
+          "EUR",
+          code === "REFUND" ? "CRDT" : "DBIT",
+          code,
+        ),
+        entry_reference: "entry-one",
+      };
+      const classified = normalizeAccountTransactions(
+        { ...account, transactions: [transaction] },
+        input,
+      )[0];
+      assert.equal(
+        classified.economicFlow,
+        code === "REFUND"
+          ? "refund"
+          : code === "REVERSAL"
+            ? "unknown"
+            : "transfer",
+      );
+    }
+    assert.equal(
+      normalizeAccountTransactions(
+        { ...account, stableIdentity: undefined },
+        input,
+      )[0].overrideSupported,
+      false,
+    );
+    assert.equal(
+      normalizeAccountTransactions(
+        { ...account, transactions: [row("Amazon")] },
+        input,
+      )[0].overrideSupported,
+      false,
+    );
+  } finally {
+    if (originalKey === undefined)
+      delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = originalKey;
+  }
+});

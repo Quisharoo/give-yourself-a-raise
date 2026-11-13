@@ -1,7 +1,7 @@
 import {
-  normalizeTransaction,
+  normalizeAccountTransactions,
   matchesFinancialFilter,
-  type FinancialRule,
+  type ClassificationInput,
   type FinancialFilter,
   type NormalizedTransaction,
 } from "./classification";
@@ -123,7 +123,7 @@ function evidenceReason(
 }
 export function detectRecurring(
   accounts: EnableBankingAccountSnapshot[],
-  rules: readonly FinancialRule[],
+  rules: ClassificationInput,
   filters: FinancialFilter,
   scope: QueryScope,
   evidence: readonly TransactionReadEvidence[],
@@ -131,13 +131,14 @@ export function detectRecurring(
 ) {
   const groups = new Map<string, NormalizedTransaction[]>();
   for (const account of accounts)
-    for (const transaction of account.transactions) {
+    for (const row of normalizeAccountTransactions(account, rules)) {
+      const transaction = row.transaction;
       if (
         transactionStatus(transaction.status) !== "BOOK" ||
         transactionEventKind(transaction.bank_transaction_code) !== "unknown"
       )
         continue;
-      const row = normalizeTransaction(account.accountId, transaction, rules);
+
       if (
         row.economicFlow !== "expense" ||
         row.signedAmount >= 0 ||
@@ -156,7 +157,7 @@ export function detectRecurring(
       groups.set(key, group);
     }
   return [...groups.values()]
-    .filter((group) => group.length >= 2)
+    .filter((group) => group.length >= 2 || group[0].purpose === "business")
     .flatMap((group) => {
       group.sort((a, b) => a.date.localeCompare(b.date));
       return splitStreams(group).map((rows) => {
@@ -242,4 +243,81 @@ export function detectRecurring(
         a.merchant.localeCompare(b.merchant) ||
         a.account_ref.localeCompare(b.account_ref),
     );
+}
+
+export function observedMerchantChanges(
+  accounts: EnableBankingAccountSnapshot[],
+  rules: ClassificationInput,
+  filters: FinancialFilter,
+  scope: QueryScope,
+) {
+  const groups = new Map<string, NormalizedTransaction[]>();
+  for (const account of accounts)
+    for (const row of normalizeAccountTransactions(account, rules)) {
+      if (
+        transactionStatus(row.transaction.status) !== "BOOK" ||
+        row.economicFlow !== "expense" ||
+        row.signedAmount >= 0 ||
+        !matchesFinancialFilter(row, filters)
+      )
+        continue;
+      const key = JSON.stringify([
+        row.merchantKey,
+        row.currency,
+        row.purpose,
+        row.project,
+      ]);
+      const group = groups.get(key) ?? [];
+      group.push(row);
+      groups.set(key, group);
+    }
+  return [...groups.values()]
+    .filter(
+      (rows) =>
+        new Set(rows.map((row) => row.accountId)).size > 1 &&
+        new Set(rows.map((row) => row.date)).size === rows.length,
+    )
+    .map((rows) => {
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+      return {
+        merchant: rows[0].merchant,
+        currency: rows[0].currency,
+        purpose: rows[0].purpose,
+        project: rows[0].project,
+        evidence:
+          "Observed merchant charges across accounts. These changes do not prove the same subscription moved accounts.",
+        amount_changes: rows
+          .slice(1)
+          .flatMap((row, index) => {
+            const previous = rows[index];
+            const before = transactionMoneyMagnitude(previous);
+            const after = transactionMoneyMagnitude(row);
+            return compareDecimal(before, after) === 0
+              ? []
+              : [
+                  {
+                    date: row.date,
+                    previous_date: previous.date,
+                    previous_account_ref: accountRef(scope, previous.accountId),
+                    account_ref: accountRef(scope, row.accountId),
+                    previous_amount_decimal: formatDecimal(before),
+                    amount_decimal: formatDecimal(after),
+                    difference_decimal: formatDecimal(
+                      addDecimal(after, {
+                        ...before,
+                        coefficient: -before.coefficient,
+                      }),
+                    ),
+                  },
+                ];
+          })
+          .slice(-10),
+      };
+    })
+    .filter((row) => row.amount_changes.length > 0)
+    .sort((a, b) => a.merchant.localeCompare(b.merchant));
+}
+function transactionMoneyMagnitude(row: NormalizedTransaction) {
+  const amount = parseDecimal(row.amountDecimal);
+  return { ...amount, coefficient: -amount.coefficient };
 }

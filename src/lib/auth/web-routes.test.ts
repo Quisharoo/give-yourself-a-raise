@@ -4,6 +4,10 @@ import test, { beforeEach } from "node:test";
 import { NextRequest } from "next/server";
 import type { BankConnection } from "../connections/store";
 import { EnableBankingError } from "../enable-banking/client";
+import type { EnableBankingAccountSnapshot } from "../enable-banking/types";
+import { normalizeAccountTransactions } from "../analysis/classification";
+import { bankAccountIdentity } from "../transactions-identity";
+import { syntheticPersistence } from "../mcp/fixtures";
 
 const require = createRequire(import.meta.url);
 let clerkUser: string | null = "user_private_owner";
@@ -14,6 +18,9 @@ let providerExpiry: unknown = undefined;
 let savedConsentExpiry: string | null | undefined = undefined;
 const effects: string[] = [];
 const cookieValues = new Map<string, string>();
+let analysisAccounts: EnableBankingAccountSnapshot[] = [];
+let persistence = syntheticPersistence();
+const accountDetails = { identification_hash: "synthetic-account", currency: "EUR", cash_account_type: "CARD" };
 
 function replaceExports(specifier: string, replacements: Record<string, unknown>) {
   const original: Record<string, unknown> = require(specifier);
@@ -41,14 +48,19 @@ replaceExports("../connections/store", {
     return true;
   },
 });
-replaceExports("../analysis/rule-store", { listFinancialRules: async () => [] });
+replaceExports("../analysis/rule-store", {
+  listFinancialRules: async () => [],
+  getClassificationSnapshot: async (subject: string) => ({ subject, rules: [], overrides: await persistence.listTransactionOverrides(subject) }),
+  observeTransactionIdentities: (subject: string, observations: Parameters<typeof persistence.observeTransactionIdentities>[1]) => persistence.observeTransactionIdentities(subject, observations),
+});
 replaceExports("../enable-banking/client", {
   hasEnableBankingConfig: () => true,
   getSessionOverview: async (sessionId: string) => {
     effects.push(`read:${sessionId}`);
     if (readFailure) throw readFailure;
-    return { accounts: [], session: { session_id: "private-provider-session", accounts: [] } };
+    return { accounts: analysisAccounts, session: { session_id: "private-provider-session", accounts: [] } };
   },
+  getAccountDetails: async () => accountDetails,
   getSession: async (sessionId: string) => { effects.push(`read:${sessionId}`); return { accounts: [], session_id: "private-provider-session" }; },
   startAuthorization: async () => { effects.push("authorize"); return { url: "https://bank.example/consent" }; },
   createSession: async () => { effects.push("create"); return { session_id: "created-session", access: { valid_until: providerExpiry } }; },
@@ -79,9 +91,53 @@ beforeEach(() => {
   readFailure = null;
   providerExpiry = undefined; savedConsentExpiry = undefined;
   effects.length = 0;
+  analysisAccounts = [];
+  persistence = syntheticPersistence();
   cookieValues.clear();
   cookieValues.set("enable_banking_session_id", "attacker-cookie-session");
   cookieValues.set("enable_banking_state", "state");
+});
+
+test("dashboard observations suppress a conflicting saved override and refuse later writes", async () => {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 29).toString("base64");
+  try {
+    const subject = "user_private_owner";
+    const account: EnableBankingAccountSnapshot = {
+      accountId: "rotating-account",
+      stableIdentity: bankAccountIdentity("Test", "IE", accountDetails).stableIdentity,
+      balances: [],
+      transactions: [{
+        entry_reference: "one-entry",
+        status: "BOOK",
+        booking_date: "2026-11-01",
+        creditor: { name: "Amazon" },
+        credit_debit_indicator: "DBIT",
+        bank_transaction_code: { code: "CARD_PAYMENT" },
+        transaction_amount: { amount: "10.00", currency: "EUR" },
+      }],
+    };
+    const original = normalizeAccountTransactions(account, { subject, rules: [], overrides: [] })[0];
+    assert(original.transactionRef && original.identityEvidence);
+    await persistence.observeTransactionIdentities(subject, [{ transaction_ref: original.transactionRef, evidence: original.identityEvidence, supported: true }]);
+    const labels = { transaction_ref: original.transactionRef, purpose: "business", project: "INCREMNT", flow_kind: "transfer" };
+    await persistence.setTransactionOverride(subject, labels);
+    analysisAccounts = [account];
+    const read = () => analysisRoute.GET(request("/api/enable-banking/analysis?dateFrom=2026-11-01&dateTo=2026-11-13"));
+    const before = await read();
+    assert.equal(before.status, 200);
+    assert.equal((await before.json()).debugCounts.wealthFlowTransactions, 1);
+    account.transactions[0].transaction_amount.amount = "20.00";
+    const after = await read();
+    assert.equal(after.status, 200);
+    const analysis = await after.json();
+    assert.equal(analysis.debugCounts.wealthFlowTransactions, 0);
+    assert.equal(analysis.debugCounts.behaviouralTransactions, 1);
+    await assert.rejects(persistence.setTransactionOverride(subject, labels), /Override refused/);
+  } finally {
+    if (previousKey === undefined) delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
+  }
 });
 
 function request(path: string, method = "GET", origin?: string) {

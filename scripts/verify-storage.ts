@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import type { FinancialRule } from "../src/lib/analysis/classification";
 import type {
+  AccountFetchObservation,
   FetchAttempt,
   FetchRequest,
   FetchSuccess,
@@ -28,58 +29,6 @@ const commandEnv = {
 const owner = "storage-verification-owner";
 const otherOwner = "storage-verification-other-owner";
 const nullMarker = `null-${randomUUID()}`;
-const expectedRules = [
-  {
-    id: "owner-apple-business",
-    priority: 100,
-    merchant_key: "apple",
-    direction: "debit",
-    except_amount: { currency: "EUR", amount: "9.99" },
-    purpose: "business",
-    project: null,
-    flow_kind: "expense",
-  },
-  {
-    id: "owner-join-brands",
-    priority: 100,
-    merchant_key: "join_brands",
-    direction: "debit",
-    except_amount: null,
-    purpose: "business",
-    project: "INCREMNT",
-    flow_kind: "expense",
-  },
-  {
-    id: "owner-amazon",
-    priority: 100,
-    merchant_key: "amazon",
-    direction: "either",
-    except_amount: null,
-    purpose: "personal",
-    project: null,
-    flow_kind: null,
-  },
-  {
-    id: "owner-amazon-prime",
-    priority: 100,
-    merchant_key: "amazon_prime",
-    direction: "either",
-    except_amount: null,
-    purpose: "personal",
-    project: null,
-    flow_kind: null,
-  },
-  {
-    id: "owner-apple-distribution",
-    priority: 100,
-    merchant_key: "apple_distribution",
-    direction: "credit",
-    except_amount: null,
-    purpose: "business",
-    project: "INCREMNT",
-    flow_kind: "revenue",
-  },
-] satisfies FinancialRule[];
 
 function parseCsv(output: string): SqlRow[] {
   const records: string[][] = [];
@@ -118,8 +67,9 @@ function parseCsv(output: string): SqlRow[] {
       headers.map((header, index) => {
         const value = columns[index];
         if (value === nullMarker) return [header, null];
+        if (header === "ambiguous") return [header, value === "t"];
         if (
-          ["request", "last_success", "rule"].includes(header) &&
+          ["request", "last_success", "broad_success", "rule", "labels", "rules", "overrides"].includes(header) &&
           value !== undefined
         ) {
           const parsed: unknown = JSON.parse(value);
@@ -222,7 +172,7 @@ async function main() {
     return rows;
   }
 
-  let restoreNeon = () => {};
+  let restoreNeon = () => { };
   try {
     mkdirSync(socketDirectory, { mode: 0o700 });
     assert(
@@ -380,6 +330,7 @@ async function main() {
           error_code: null,
           request,
           last_success: success,
+          broad_success: success,
         },
       ],
       "success metadata roundtrips exactly",
@@ -493,11 +444,13 @@ async function main() {
       null,
       "reconnection does not inherit prior coverage",
     );
+    assert.equal(observations[0]?.broad_success, null);
     await store.finishAccountFetch(nextAttempt, { success });
     assert.equal(
       (await store.getAccountFetchObservations(replacement))[0]?.last_result,
       "running",
     );
+    assert.equal((await store.getAccountFetchObservations(replacement))[0]?.broad_success, null, "old generation cannot update broad coverage");
     assert.equal(
       await store.deleteBankConnection(owner, originalSession),
       false,
@@ -554,6 +507,10 @@ async function main() {
     const rules: typeof import("../src/lib/analysis/rule-store") = appRequire(
       "./src/lib/analysis/rule-store.ts",
     );
+    const expectedRules = rules.INITIAL_OWNER_RULES;
+    assert.equal(expectedRules.length, 21);
+    assert.equal(expectedRules[0].project, "INCREMNT");
+    assert.equal(expectedRules[0].zero_amount, false);
     const sortedRules = [...expectedRules].sort((left, right) =>
       left.id.localeCompare(right.id),
     );
@@ -608,6 +565,114 @@ async function main() {
       ),
       [{ subject: owner, count: String(expectedRules.length) }],
     );
+    assert.equal(await rules.deleteFinancialRule(owner, "owner-cursor"), true);
+    assert.equal(await rules.deleteFinancialRule(owner, "owner-cursor"), false);
+    assert.equal((await rules.listFinancialRules(owner)).some((rule) => rule.id === "owner-cursor"), false, "deleted seeds stay deleted");
+    const custom: FinancialRule = { id: "user-literal", priority: 200, merchant_text: "Test *literal", direction: "debit", except_amount: null, exact_amount: { currency: "EUR", amount: "10.00" }, purpose: "business", project: "Test", flow_kind: "expense" };
+    await rules.upsertFinancialRule(owner, custom);
+    assert.deepEqual((await rules.listFinancialRules(owner)).find((rule) => rule.id === custom.id), custom);
+    assert.equal((await rules.listFinancialRules(otherOwner)).length, 0);
+    const transaction_ref = `txn_${"a".repeat(43)}`;
+    const oneOff = { transaction_ref, purpose: "business", project: "Test", flow_kind: "expense" } as const;
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref, evidence: "evidence-one", supported: true }]);
+    await rules.setTransactionOverride(owner, oneOff);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff]);
+    await assert.rejects(rules.setTransactionOverride(otherOwner, oneOff), /Override refused/);
+    const clear = { transaction_ref, labels: null };
+    assert.equal(await rules.setTransactionOverride(otherOwner, clear), null);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff], "clearing another owner's reference cannot remove its labels");
+    await assert.rejects(rules.setTransactionOverride(owner, { ...clear, purpose: "personal" }));
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff], "mixed set and clear input cannot mutate labels");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal(await rules.setTransactionOverride(owner, clear), null);
+      assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [], "clearing restores inheritance and repeated clears are harmless");
+    }
+    await rules.setTransactionOverride(owner, oneOff);
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref, evidence: "evidence-two", supported: true }]);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [], "conflicting evidence disables existing override");
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    assert.equal(await rules.setTransactionOverride(owner, clear), null);
+    assert.deepEqual(query(`SELECT transaction_ref FROM bank_transaction_overrides WHERE subject = ${quoteSql(owner)}`), [], "clearing can remove a disabled override without making its identity eligible");
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    const duplicateRef = `txn_${"b".repeat(43)}`;
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref: duplicateRef, evidence: "duplicate", supported: false }, { transaction_ref: duplicateRef, evidence: "duplicate", supported: true }]);
+    await assert.rejects(rules.setTransactionOverride(owner, { ...oneOff, transaction_ref: duplicateRef }), /Override refused/);
+
+    const broadAttempt = { ...otherAttempt, accountRef: "acc_broad", attemptId: "broad" };
+    const wide = { ...success, date_from: "2026-01-01", date_to: "2026-11-13", status: "all" };
+    await store.beginAccountFetch(broadAttempt, wide);
+    await store.finishAccountFetch(broadAttempt, { success: wide });
+    const narrowAttempt = { ...broadAttempt, attemptId: "narrow" };
+    const narrow = { ...success, date_from: "2026-11-13", date_to: "2026-11-13", status: "BOOK" };
+    await store.beginAccountFetch(narrowAttempt, narrow);
+    await store.finishAccountFetch(narrowAttempt, { success: narrow });
+    const durable = (await store.getAccountFetchObservations(otherConnection)).find((row) => row.account_ref === "acc_broad");
+    assert.deepEqual(durable?.last_success, narrow);
+    assert.deepEqual(durable?.broad_success, wide, "narrow reads cannot replace broad coverage");
+
+    for (const lateBroad of [true, false]) {
+      const broad = { ...broadAttempt, accountRef: `acc_rolling_${lateBroad}`, attemptId: "initial-broad" };
+      const readCoverage = async (): Promise<AccountFetchObservation | undefined> =>
+        (await store.getAccountFetchObservations(otherConnection)).find((row) => row.account_ref === broad.accountRef);
+      const initial = { ...wide, date_from: "2025-11-13" };
+      const currentNarrow = { ...broad, attemptId: "latest-narrow" };
+      await store.beginAccountFetch(broad, initial);
+      if (!lateBroad) await store.finishAccountFetch(broad, { success: initial });
+      await store.beginAccountFetch(currentNarrow, narrow);
+      await store.finishAccountFetch(currentNarrow, { success: narrow });
+      const beforeBroad = await readCoverage();
+      if (lateBroad) await store.finishAccountFetch(broad, { success: initial });
+      const afterBroad = await readCoverage();
+      assert.deepEqual(afterBroad, { ...beforeBroad, broad_success: initial }, "late broad completion advances only broad coverage");
+
+      const rolling = { ...initial, date_from: "2025-11-14", date_to: "2026-11-14", completed_at: "2026-11-14T12:00:00Z" };
+      const rollingAttempt = { ...broad, attemptId: "rolling-broad" };
+      await store.beginAccountFetch(rollingAttempt, rolling);
+      await store.finishAccountFetch(rollingAttempt, { success: rolling });
+      const rolled = await readCoverage();
+      assert.deepEqual(rolled?.broad_success, rolling, "a rolling 366-day window replaces yesterday's full window");
+
+      const rejectedWindows: Array<[string, FetchSuccess]> = [
+        ["narrow", { ...rolling, date_from: "2026-11-14", date_to: "2026-11-15" }],
+        ["status", { ...rolling, date_from: "2025-11-01", date_to: "2026-11-15", status: "BOOK" }],
+        ["stale", { ...rolling, date_from: "2025-11-01", completed_at: initial.completed_at }],
+        ["older-end", { ...rolling, date_from: "2025-11-01", date_to: "2026-11-13" }],
+      ];
+      for (const [name, candidate] of rejectedWindows) {
+        const candidateAttempt = { ...broad, attemptId: `candidate-${name}` };
+        await store.beginAccountFetch(candidateAttempt, candidate);
+        await store.finishAccountFetch(candidateAttempt, { success: candidate });
+        const rejected = await readCoverage();
+        assert.deepEqual(rejected?.broad_success, rolling, `${name} cannot replace broad coverage`);
+      }
+
+      const newest = { ...rolling, date_from: "2025-11-15", date_to: "2026-11-15", completed_at: "2026-11-15T12:00:00Z" };
+      const newestAttempt = { ...broad, attemptId: "newest-broad" };
+      const failedAttempt = { ...broad, attemptId: "latest-failure" };
+      await store.beginAccountFetch(newestAttempt, newest);
+      await store.beginAccountFetch(failedAttempt, narrow);
+      await store.finishAccountFetch(failedAttempt, { errorCode: "provider_unavailable" });
+      const failed = await readCoverage();
+      await store.finishAccountFetch(newestAttempt, { success: newest });
+      const afterFailure = await readCoverage();
+      assert.deepEqual(afterFailure, { ...failed, broad_success: newest }, "late broad success preserves the latest failed attempt and last success");
+    }
+
+    await sql`DELETE FROM bank_financial_rules WHERE subject = ${owner}`;
+    await sql`DELETE FROM bank_classification_migrations WHERE subject = ${owner}`;
+    const legacyApple = { ...expectedRules[0], project: null };
+    delete legacyApple.zero_amount;
+    const editedAmazon = { ...expectedRules[2], purpose: "business", project: "Owner edit" };
+    for (const rule of [legacyApple, editedAmazon]) await sql`INSERT INTO bank_financial_rules(subject, rule_id, rule) VALUES (${owner}, ${rule.id}, ${JSON.stringify(rule)}::jsonb)`;
+    const migrated = await rules.listFinancialRules(owner);
+    assert.deepEqual(migrated.find((rule) => rule.id === "owner-apple-business"), expectedRules[0], "unchanged legacy Apple is repaired");
+    assert.deepEqual(migrated.find((rule) => rule.id === "owner-amazon"), editedAmazon, "legacy user edits survive migration");
+    assert.equal(migrated.some((rule) => rule.id === "owner-amazon-prime"), false, "missing legacy seeds are not recreated");
+    assert(migrated.some((rule) => rule.id === "owner-cursor"), "new migration seeds missing INCREMNT merchants");
+    const migrationCount = query(`SELECT count(*)::text AS count FROM bank_classification_migrations WHERE subject = ${quoteSql(owner)}`);
+    assert.deepEqual(migrationCount, [{ count: "1" }]);
+
   } finally {
     restoreNeon();
     for (const [key, value] of Object.entries(savedEnv)) {

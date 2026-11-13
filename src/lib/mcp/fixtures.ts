@@ -1,3 +1,10 @@
+import { TransactionInputError } from "../transactions";
+import {
+  financialRuleSchema,
+  transactionOverrideInputSchema,
+  type FinancialRule,
+  type TransactionOverride,
+} from "../analysis/classification";
 import type {
   AccountFetchObservation,
   FetchAttempt,
@@ -12,11 +19,24 @@ export function syntheticPersistence(): Pick<
   | "finishAccountFetch"
   | "getAccountFetchObservations"
   | "listFinancialRules"
+  | "listTransactionOverrides"
+  | "upsertFinancialRule"
+  | "deleteFinancialRule"
+  | "setTransactionOverride"
+  | "observeTransactionIdentities"
 > {
   const observations = new Map<
     string,
     { attempt: FetchAttempt; observation: AccountFetchObservation }
   >();
+  const rules = new Map<string, Map<string, FinancialRule>>();
+  const overrides = new Map<string, Map<string, TransactionOverride>>();
+  const identities = new Map<
+    string,
+    { evidence: string; ambiguous: boolean }
+  >();
+  const identityKey = (subject: string, ref: string) =>
+    JSON.stringify([subject, ref]);
   const key = (attempt: FetchAttempt) =>
     JSON.stringify([
       attempt.connection.subject,
@@ -26,7 +46,54 @@ export function syntheticPersistence(): Pick<
     ]);
   return {
     updateConsentExpiry: async () => {},
-    listFinancialRules: async () => [],
+    listFinancialRules: async (subject) => [
+      ...(rules.get(subject)?.values() ?? []),
+    ],
+    listTransactionOverrides: async (subject) =>
+      [...(overrides.get(subject)?.values() ?? [])].filter(
+        (item) =>
+          !identities.get(identityKey(subject, item.transaction_ref))
+            ?.ambiguous,
+      ),
+    upsertFinancialRule: async (subject, raw) => {
+      const rule = financialRuleSchema.parse(raw);
+      const owned = rules.get(subject) ?? new Map<string, FinancialRule>();
+      owned.set(rule.id, rule);
+      rules.set(subject, owned);
+      return rule;
+    },
+    deleteFinancialRule: async (subject, id) =>
+      rules.get(subject)?.delete(id) ?? false,
+    setTransactionOverride: async (subject, raw) => {
+      const override = transactionOverrideInputSchema.parse(raw);
+      if ("labels" in override) {
+        overrides.get(subject)?.delete(override.transaction_ref);
+        return null;
+      }
+      const identity = identities.get(
+        identityKey(subject, override.transaction_ref),
+      );
+      if (!identity || identity.ambiguous)
+        throw new TransactionInputError(
+          "Override refused for an unsupported identity.",
+        );
+      const owned =
+        overrides.get(subject) ?? new Map<string, TransactionOverride>();
+      owned.set(override.transaction_ref, override);
+      overrides.set(subject, owned);
+      return override;
+    },
+    observeTransactionIdentities: async (subject, observations) =>
+      observations.map((item) => {
+        const key = identityKey(subject, item.transaction_ref);
+        const previous = identities.get(key);
+        const ambiguous =
+          !item.supported ||
+          (previous?.ambiguous ?? false) ||
+          (previous !== undefined && previous.evidence !== item.evidence);
+        identities.set(key, { evidence: item.evidence, ambiguous });
+        return { transaction_ref: item.transaction_ref, ambiguous };
+      }),
     beginAccountFetch: async (attempt, request) => {
       const previous = observations.get(key(attempt));
       observations.set(key(attempt), {

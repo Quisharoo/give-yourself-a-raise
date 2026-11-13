@@ -1,3 +1,4 @@
+import { bankAccountIdentity } from "@/lib/transactions-identity";
 import { randomUUID } from "node:crypto";
 import {
   getBankConnection,
@@ -106,6 +107,42 @@ export async function readBankSession(
   } catch (error) {
     throw safeBankFailure(error);
   }
+  const accounts = await Promise.all(
+    session.accounts.map(async (entry) => {
+      const account = typeof entry === "string" ? { uid: entry } : entry;
+      try {
+        return {
+          ...account,
+          ...bankAccountIdentity(
+            connection.provider,
+            connection.country,
+            await deps.getAccountDetails(account.uid),
+          ),
+        };
+      } catch (error) {
+        if (safeBankFailure(error).code === "consent_expired")
+          throw safeBankFailure(error);
+        return {
+          uid: account.uid,
+          name: account.name,
+          stableIdentity: undefined,
+        };
+      }
+    }),
+  );
+  const identities = accounts
+    .map((account) => account.stableIdentity)
+    .filter(Boolean);
+  session = {
+    ...session,
+    accounts: accounts.map((account) =>
+      account.stableIdentity &&
+      identities.filter((value) => value === account.stableIdentity).length !==
+        1
+        ? { ...account, stableIdentity: undefined }
+        : account,
+    ),
+  };
   const expiresAt = sessionConsentExpiry(session);
   await deps.updateConsentExpiry(connection, expiresAt);
   await assertCurrentConnection(connection, deps);
@@ -206,6 +243,13 @@ export async function readBankAccounts(
   const scope = {
     subject: connection.subject,
     sessionId: connection.sessionId,
+    accountIdentities: Object.fromEntries(
+      session.accounts.flatMap((account) =>
+        typeof account !== "string" && account.stableIdentity
+          ? [[account.uid, account.stableIdentity]]
+          : [],
+      ),
+    ),
   };
   const selected = selectAccounts(session, scope, refs);
   async function fetchResource<T>(
@@ -291,6 +335,9 @@ export async function readBankAccounts(
       return {
         account: {
           accountId: account.uid,
+          stableIdentity: account.stableIdentity,
+          classificationAccountRef: accountRef(scope, account.uid),
+          unsupportedTransactionRefs: new Array<string>(),
           name: account.name,
           balances: bal.value.rows,
           transactions: tx.value.rows.filter((row) => {

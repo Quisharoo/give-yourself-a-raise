@@ -1,70 +1,71 @@
 # Banking MCP financial contract
 
-The MCP gives every agent the same financial classifications, exact per-currency totals, connection health, and recurring-charge evidence. It fetches bank transactions on demand. It persists connection metadata and user rules, not transaction histories.
+The MCP gives agents the same stored classifications, exact per-currency totals, connection health, and recurring-charge evidence. Bank transactions are fetched on demand. The application stores encrypted connections, fetch metadata, classification rules, one-off labels, and opaque identity evidence. It does not store a transaction history.
 
-## Usage
+## Classification reads and writes
 
-`get_connection_status` reports provider-confirmed consent validity, a warning within seven days, and the last recorded account fetch outcomes. Bank reads fail explicitly when consent expires or requested account data cannot be fetched.
+`list_classification_rules` returns the authenticated owner's rules and supported transaction overrides. Listing and editing classifications does not require active bank consent.
 
-`get_transaction_totals` accepts explicit dates and optional `purpose`, `project`, and `flow_kind` filters. Raw debit, credit, and net describe cash movements. Separately named expense, income, revenue, refund, and transfer totals describe financial meaning. Transfers never enter expense or income totals. Currencies remain separate.
+Bank reads require `read:bank_data`. These label tools require both `read:bank_data` and the separate `write:classifications` OAuth permission:
 
-`find_transactions` returns compact snake_case rows with exact signed decimal amounts and at most 50 rows. A 12,000-byte row budget can shorten a page and sets `page_limited_by_size`; the cursor continues after the last complete row. Full detail includes the raw merchant descriptor and classification evidence. Paging preserves existing signed cursor and whole-result guarantees.
+- `upsert_classification_rule` saves a rule by `id`.
+- `delete_classification_rule` deletes a rule by `id`.
+- `set_transaction_override` saves one-off labels for a supported observed `transaction_ref`. Pass only `transaction_ref` and `labels: null` to clear a one-off and resume current merchant rules or heuristic classification. A clear returns `override: null`, including when no override exists.
 
-`get_recurring_transactions` reports observed cadence, the last charge, an estimated next date, observed amount changes, and guarded overdue candidates. Estimates are not bank-scheduled payments or proof of cancellation.
+The server checks the write permission before calling any classification storage function. Existing read tokens cannot change labels. Bank tools cannot move money.
 
-## Ownership and data shape
+A rule matches either an exact canonical `merchant_key` or case-insensitive literal `merchant_text` in the merchant descriptor. Text is not a regular expression. Optional constraints are `exact_amount`, `except_amount`, `direction`, `account_ref`, and `zero_amount`. Amount constraints include currency and use decimal strings. Higher `priority` wins. Equal priorities use ascending rule ID. Inputs have bounded strings and reject unknown fields.
 
-- The provider client parses authoritative `access.valid_until` and structured provider errors. Missing expiry is unknown. `EXPIRED_SESSION` is distinct from other authentication failures.
-- Connection storage owns encrypted sessions and account/resource fetch observations. Each observation includes the attempt, last successful fetch, requested range/status, page completion, observed transaction dates, and safe error code. A failed attempt preserves the previous success. An old session cannot overwrite a replacement connection's observations.
-- A shared classification module owns canonical merchant identity, raw descriptor, economic flow, category, purpose, project, and matched rule evidence. Search, totals, spending summaries, comparisons, and recurring detection consume that same classification.
-- Rule storage owns subject-scoped persistent rules. Initial rules are seeded idempotently from the user's instructions. Existing OAuth access remains read-only. No rule-writing MCP tools are added under a read-only scope.
-- Recurring detection consumes booked expenses and current fetch evidence. It groups distinct charge streams by account, merchant, currency, purpose, and project. Calendar cadence and exact amount differences remain separate from estimated projections.
+Rules assign `purpose`, nullable `project`, and nullable `flow_kind`. Purpose is `business`, `personal`, or `unassigned`. Economic flows are `expense`, `income`, `revenue`, `refund`, `transfer`, and `unknown`. A one-off override wins purpose, project, and explicit flow labels over merchant rules and generic funding defaults. Its flow cannot replace bank-backed internal movement, a refund, or a reversal.
 
-Purpose is `business`, `personal`, or `unassigned`. Project is a separate optional label. Economic flow distinguishes expenses, income/revenue, refunds, internal transfers, and unknown movements. Purpose rules cannot turn confirmed internal transfers into spending or revenue.
+Each MCP read loads one classification snapshot and uses it for transaction rows, exact totals, spending estimates, both comparison periods, and recurrence. Production snapshot reads select rules and supported overrides in one database statement. Changed classifications invalidate existing paging fingerprints.
 
-## Initial owner rules
+## Owner defaults and seed migration
 
-- Apple bills are business expenses except exactly EUR 9.99. The exception does not by itself establish personal purpose. An equal amount in another currency is not that exception.
-- Join Brands variants resolve to one merchant and business spending for INCREMNT.
-- Amazon is personal. Amazon Prime remains a distinct merchant from general Amazon shopping.
-- Apple Distribution credit payouts are business revenue for INCREMNT. They represent bank receipts, not gross App Store sales or profit.
+The owner defaults include these INCREMNT expenses:
 
-Confirmed top-ups, savings movements, and currency exchanges are transfers in either direction. A generic bank `TRANSFER` code alone does not prove an internal movement. Unknown movements stay explicit.
+- ChatGPT, OpenRouter, Render, Register365, Hetzner, Upstash, Vercel, Cursor, and Lovable.
+- Intellectual Property Office and Companies Registration Office, including truncated bank descriptors.
+- Join Brands and nonzero Apple bills other than exactly EUR 9.99.
 
-## Integrated verification coverage
+Exactly EUR 9.99 Apple bills are personal. Google Play, Exchanged to USD, Kevin Byrne, Paul Michael McCarthy, Amazon, and Amazon Prime are personal. Currency exchange remains a transfer. Amazon Prime and Upstash have distinct merchant aliases before the broader Amazon and Vercel aliases. Apple Distribution credit receipts are INCREMNT revenue, not gross App Store sales or profit.
 
-1. Connection health and presentation. Verify authoritative expiry and seven-day boundaries, early expiry errors, unrelated provider errors, durable success/failure metadata, empty versus failed fetches, replacement-connection races, exact balances, consistent output names, compact/full responses, and paging through MCP transport. Validate through the real MCP transport and provider fixtures.
-2. Shared financial meaning. Verify both transfer directions, canonical aliases with raw detail, owner-rule persistence and isolation, exact Apple amount/currency exceptions, Join Brands project totals, Apple Distribution revenue, matching filters across every tool, and cursor invalidation after rule changes. Validate the same rows across consumers and retain the connection/output checks.
-3. Recurring charges. Verify calendar month ends, leap years, weekly/monthly/quarterly/annual candidates, multiple bills from one merchant, observed price changes, skipped periods, and exclusion of pending/refunded/reversed rows. A failed fetch, insufficient history, old coverage, or incomplete pagination cannot become a missed-charge assertion.
+A versioned atomic seed migration adds the defaults once. It repairs the unchanged legacy Apple rule's missing project and zero-amount exclusion. Existing user edits survive. Missing legacy rules are preserved when upgrading an existing rule set. Deleting a seed after migration does not recreate it on later reads or restarts. Merchant aliases contain names, while database records contain owner preferences.
 
-Each increment is reviewed against observable MCP behavior and stored values. Synthetic financial fixtures are used for verification. No production bank data enters test output.
+## Stable references and safe overrides
 
-## Synthesis decision
+For accounts with validated Enable Banking `identification_hash`, references use the bank's cross-session identification, provider, country, currency, and account type. A transaction adds its bank `entry_reference`, or `transaction_id` when no entry reference exists. A subject-scoped HMAC uses the server encryption key, independently of the bank session and rotating account UID. Rotating that server key changes these references.
 
-The architecture compares three sketches from gpt-6-astra, gpt-6.1-sol, and gpt-6-luna. All preserve live bank reads and avoid a transaction warehouse. The selected shape centralizes financial classification and fetch evidence while retaining existing exact query arithmetic and analysis projections. Generation and attempt guards come from the observation-reader sketch. The extension sketch contributes fail-closed whole-result totals and explicit evidence for overdue candidates. All reviewers are GPT models, so provider diversity is limited.
+The provider documents `identification_hash` for matching accounts across sessions in its [API reference](https://enablebanking.com/docs/api/reference/). Local verification simulates a reconnect with rotated session and account IDs. It does not establish a real future provider reconnect outcome.
 
-We accept live provider availability and uncertain history completeness in exchange for avoiding retained transaction histories, ingestion jobs, and reconciliation migrations. Completing all provider pages describes a completed request, not a guarantee that the bank returned all historical activity.
+The application retains only opaque references and hashes of observed identity evidence. It does not use merchant, date, or amount similarity to reconcile transactions. Dashboard and MCP reads observe current bank identity evidence through the same policy before classification. Duplicate bank identities and contradictory evidence disable overrides conservatively, including previously saved labels. No duplicate ordinal becomes an override identity.
 
-## Implementation reconciliation
+Optional account details may be unavailable. Those accounts remain readable with session-bound references. Transactions with missing, duplicate, or conflicting identity evidence return `override_supported: false` and an explicit `override_reason`. Supported identities return a null reason. Saving labels refuses unsupported, unknown, or other-owner references. Clearing deletes only the caller's stored override and can remove disabled labels without making an ambiguous identity eligible again. Account-filter rules using fallback session-bound references do not survive a reconnect.
 
-The user replaced the sequential increment gates with one integrated implementation and verification pass. The three coverage groups above remain the acceptance cases. No deployment is part of this implementation.
+Cursors remain signed for the bank session, user, fixed query, result fingerprint, and 15-minute expiry. A reconnect requires restarting paging even when transaction references remain stable. No cursor database is used.
 
-The shared classifier retains the existing category rules and adds economic flow, merchant identity, purpose, project, and matched-rule evidence. Merchant aliases are bounded table entries. Owner preferences are persisted declarative records seeded only for the configured owner, with conflict-safe insertion. `list_classification_rules` inspects those records under the existing read-only scope. No preference mutation tool or predicate language is added.
+## Exact totals, pending charges, and response limits
 
-The MCP and browser analysis route consume that classifier. Search, totals, summaries, and both comparison periods use the same exact aggregation. Monthly projections remain separately labelled estimates. MCP fields are projected explicitly to snake_case; the web analysis DTO retains camelCase. Transaction references use source identity and remain stable when a rule changes; cursor fingerprints include the rule snapshot.
+`get_transaction_totals` and `find_transactions` default to `BOOK`. Decimal-string debit, credit, and net totals cover all matching bank-returned rows before pagination. Classified totals separately report each economic flow. Currencies remain separate. Bank-history completeness and card-balance reconciliation are not guaranteed.
 
-Balances expose canonical `amount_decimal`, currency, balance type, and provider reference/change timestamps. Search requests up to 50 compact rows and applies the byte budget before constructing its continuation cursor. `detail: full` adds the bounded raw merchant descriptor and classification evidence. Provider IDs, session IDs, and IBANs are excluded from MCP output. Structured failures expose only a safe code, message, reconnect URL, and persisted fetch observations.
+For a `BOOK` request, `pending` reports separate `PDNG` totals with the same dates, accounts, merchant, amount, and financial filters. Pending charges never enter booked totals. A different explicit status retains its existing meaning.
 
-Connection generations and per-resource attempt IDs guard persisted observations. Last success survives a later failed attempt. Empty success records zero rows and null observed dates. Balances do not refresh transactions. Request coverage, pagination completion, unknown history completeness, and latest booked dates remain distinct. A connection replaced during a fetch causes the tool to discard the obsolete result.
+`find_transactions` returns at most 50 complete rows. A row budget and a 16,000-byte serialized MCP tool-result budget can shorten the page. The result retains JSON text and structured data for client compatibility. `page_limited_by_size` reports shortening, and `next_cursor` continues after the last emitted row. Metadata that cannot fit with one row produces an explicit request error suggesting narrower filters. Full detail adds the raw merchant descriptor and classification evidence.
 
-Recurring analysis uses weekly, fortnightly, monthly, quarterly, and annual cadence candidates. Annual cadence permits two observations at low confidence within the bank request's 366-day limit. Month-end addition clamps calendar days. Supported concurrent amount streams can separate bills from one merchant; sequential prices remain one stream with exact changes. Ambiguous or insufficient evidence stays explicit. Overdue-not-observed candidates require a successful current fetch covering the expected date plus grace through the evaluation date. Unknown bank-history completeness remains visible. Recurring output is capped at 50 entries, with count, next offset, and an instruction to restart if live data changes. The ten most recent amount changes are returned with the full observed change count.
+## Freshness and recurrence
 
-Synthetic provider, classification, cadence, and actual MCP transport tests cover these contracts. Final local verification logs live under `.audit/integrated-*.log`. Independent review, real PostgreSQL storage acceptance, merge, deployment, and production bank validation remain separate outcomes.
+Fetch metadata records the last attempt and `last_success`. A failed attempt preserves successful coverage. Only the latest attempt updates that state. A broad read can finish after a newer narrow attempt and independently advance `broad_success` within the same connection generation. A replacement window must finish no earlier, end no earlier, cover at least as many days, and include the previous status coverage. Daily rolling history windows qualify. The watermark describes one actual read and never combines separate windows. A replacement connection starts a new generation. Request dates, status, pagination completion, observed dates, and unknown history completeness remain explicit.
 
-The implementation-owner gate passed 142 tests before independent review. Review reproduced and corrected four gaps. Request-local successful coverage now travels with returned rows. Generation checks reject obsolete consent responses. Anchored internal-movement descriptors replace broad note substrings. Coherent whole-group cadence takes precedence over amount-based stream splitting. Regression tests demonstrate the original incorrect outcomes and their corrections.
+Recurring analysis consumes booked expenses and request-local successful fetch evidence. It groups streams by account, merchant, currency, purpose, and project. Weekly, fortnightly, monthly, and quarterly inference require at least three observations. Annual inference permits two. Supported concurrent amount streams can separate bills from one merchant. Month-end calendar addition clamps to the last valid day.
 
-`npm run verify:storage` initializes a private local PostgreSQL fixture and executes the actual storage SQL. It checks migration from the old schema, encrypted session roundtrips, success/failure observations, attempt and reconnect guards, concurrent disconnects, owner isolation, and persistent rule seeding that preserves overrides. No production bank data or credentials are required. Final integrated checks and independent review are recorded in the local audit trail; merge, deployment, and production validation remain separate.
+Business merchants with a single observation remain visible as insufficient-evidence candidates. They do not acquire a predicted billing date. `merchant_amount_changes` separately reports observed merchant amount changes across accounts, with account provenance and an explicit warning that the same subscription has not been proved. Those observations do not establish recurring identity or overdue status.
 
-The final local gate passed 152 tests with zero failures or skips, typecheck, lint, MCP smoke, and production build. PostgreSQL acceptance passed 79 actual queries across 12 check groups. These are synthetic local verification results. The decision trail is retained in `.audit/mcp-reliability.tsv`.
+Overdue-not-observed requires supported cadence and a fresh, completed request covering the expected date through the evaluation date. It is not proof of cancellation or nonbilling. Failed reads, pending charges, insufficient history, stale coverage, and ambiguous charges cannot establish an overdue charge. `history_complete` remains `unknown` because provider pagination does not prove complete historical bank activity.
 
-Independent final review also covered the response boundary after account details and observation lookups. Every successful connected response now checks its connection generation after its final asynchronous work. The independent review passed 73 focused tests and three direct reconnect reproductions, with no remaining material findings. All reviewers used GPT models, so provider diversity was limited.
+## Local verification
+
+`npm test` covers the shared classifier and actual MCP transport, scope enforcement, reconnect identity, duplicate and conflicting identity, protected events, whole-result totals, response size, and paging. `npm run smoke:mcp` uses the real SDK and validates published output schemas with synthetic bank data.
+
+`npm run verify:storage` executes the application SQL against a private temporary PostgreSQL instance. It checks seed migration, preserved edits and deletions, one-off override isolation, conflicting evidence, durable broad coverage, encrypted connections, attempt guards, and reconnect races. It uses no production credentials.
+
+Merge, deployment, production data acceptance, and a real reconnect remain separate from these local checks. The optional rules-management page is deferred.

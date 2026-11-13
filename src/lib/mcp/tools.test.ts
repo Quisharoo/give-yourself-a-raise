@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MCP_ACCESS_SCOPE } from "./auth.ts";
+import { MCP_ACCESS_SCOPE, MCP_CLASSIFICATION_SCOPE } from "./auth.ts";
 import { CHATGPT_TOOLS, safeAccountCurrency, safeAccountType } from "./tools.ts";
 
 test("only exposes recognized account types and currency codes", () => {
@@ -27,15 +27,19 @@ test("publishes the private Revolut tool set", () => {
       "compare_spending_periods",
       "list_classification_rules",
       "get_recurring_transactions",
+      "upsert_classification_rule",
+      "delete_classification_rule",
+      "set_transaction_override",
     ],
   );
 });
 
 test("marks every banking tool read-only and OAuth protected", () => {
   for (const tool of CHATGPT_TOOLS) {
-    assert.equal(tool.annotations?.readOnlyHint, true);
-    assert.equal(tool.annotations?.destructiveHint, false);
-    assert.deepEqual(tool.securitySchemes, [{ scopes: [MCP_ACCESS_SCOPE], type: "oauth2" }]);
+    const writing = ["upsert_classification_rule", "delete_classification_rule", "set_transaction_override"].includes(tool.name);
+    assert.equal(tool.annotations?.readOnlyHint, !writing);
+    assert.equal(tool.annotations?.destructiveHint, tool.name === "delete_classification_rule");
+    assert.deepEqual(tool.securitySchemes, [{ scopes: writing ? [MCP_ACCESS_SCOPE, MCP_CLASSIFICATION_SCOPE] : [MCP_ACCESS_SCOPE], type: "oauth2" }]);
     assert.deepEqual(tool._meta?.securitySchemes, tool.securitySchemes);
   }
 });

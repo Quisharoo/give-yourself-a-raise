@@ -24,7 +24,7 @@ async function handleMcp(request: Request) {
       enableJsonResponse: true,
       sessionIdGenerator: undefined,
     });
-    const server = createMcpServer(user.subject, appBaseUrl);
+    const server = createMcpServer(user.subject, appBaseUrl, undefined, user.scopes);
     await server.connect(transport);
     const response = await transport.handleRequest(request);
     response.headers.set("Cache-Control", "no-store");

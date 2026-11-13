@@ -160,11 +160,14 @@ test("hosted MCP authorizes only the owner while preserving bearer-only connecto
         "get_recurring_transactions",
         "get_transaction_totals",
         "list_classification_rules",
+        "upsert_classification_rule",
+        "delete_classification_rule",
+        "set_transaction_override",
         "summarize_spending",
-      ]);
+      ].sort());
       for (const tool of tools) {
-        assert.equal(tool.annotations?.readOnlyHint, true);
-        assert.equal(tool.annotations?.destructiveHint, false);
+        assert.equal(tool.annotations?.readOnlyHint, !["upsert_classification_rule", "delete_classification_rule", "set_transaction_override"].includes(tool.name));
+        assert.equal(tool.annotations?.destructiveHint, tool.name === "delete_classification_rule");
       }
     });
   }

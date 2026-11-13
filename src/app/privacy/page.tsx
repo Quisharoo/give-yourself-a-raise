@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" updated="August 9, 2026">
+    <LegalPage title="Privacy Policy" updated="November 13, 2026">
       <p>
         Give Yourself a Raise lets you connect a bank account through Enable Banking and ask for
         read-only spending analysis in the web app or ChatGPT.
@@ -17,7 +17,9 @@ export default function PrivacyPage() {
       <p>
         The Enable Banking session identifier is encrypted with AES-256-GCM before it is stored and
         is bound to your Clerk user ID. Raw bank transactions are fetched on demand; this service does
-        not persist them in its application database.
+        not persist them in its application database. We retain your classification rules, one-off labels,
+        and opaque references with hashed identity evidence so labels can survive bank reconnects.
+        Separately authorized classification tools change labels only.
       </p>
       <h2>Sharing</h2>
       <p>
