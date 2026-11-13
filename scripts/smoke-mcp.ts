@@ -225,7 +225,9 @@ async function main() {
         row.account_ref === observation.account_ref && row.resource === "transactions")?.last_success);
       assert.ok(observation.last_success);
     }
-    assert.deepEqual((await call("get_connection_status")).data_status, failedObservations);
+    assert.ok(failedObservations.every((row) => row.resource === "transactions"));
+    assert.deepEqual(records.parse((await call("get_connection_status")).data_status)
+      .filter((row) => row.resource === "transactions"), failedTransactions);
     state.fail = false;
     state.sessionFail = true;
     await expectError("get_connection_status", {}, "bank_unavailable");
