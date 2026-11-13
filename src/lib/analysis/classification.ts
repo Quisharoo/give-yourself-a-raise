@@ -55,6 +55,13 @@ export const classificationLabelsSchema = z
 export const transactionOverrideSchema = classificationLabelsSchema
   .extend({ transaction_ref: z.string().regex(/^txn_[A-Za-z0-9_-]{43}$/) })
   .strict();
+export const transactionOverrideInputSchema = z.union([
+  transactionOverrideSchema,
+  z.object({
+    transaction_ref: transactionOverrideSchema.shape.transaction_ref,
+    labels: z.null(),
+  }).strict(),
+]);
 export type TransactionOverride = z.infer<typeof transactionOverrideSchema>;
 export interface ClassificationSnapshot {
   subject: string;

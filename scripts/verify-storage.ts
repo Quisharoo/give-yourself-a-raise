@@ -579,8 +579,21 @@ async function main() {
     await rules.setTransactionOverride(owner, oneOff);
     assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff]);
     await assert.rejects(rules.setTransactionOverride(otherOwner, oneOff), /Override refused/);
+    const clear = { transaction_ref, labels: null };
+    assert.equal(await rules.setTransactionOverride(otherOwner, clear), null);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff], "clearing another owner's reference cannot remove its labels");
+    await assert.rejects(rules.setTransactionOverride(owner, { ...clear, purpose: "personal" }));
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff], "mixed set and clear input cannot mutate labels");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal(await rules.setTransactionOverride(owner, clear), null);
+      assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [], "clearing restores inheritance and repeated clears are harmless");
+    }
+    await rules.setTransactionOverride(owner, oneOff);
     await rules.observeTransactionIdentities(owner, [{ transaction_ref, evidence: "evidence-two", supported: true }]);
     assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [], "conflicting evidence disables existing override");
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    assert.equal(await rules.setTransactionOverride(owner, clear), null);
+    assert.deepEqual(query(`SELECT transaction_ref FROM bank_transaction_overrides WHERE subject = ${quoteSql(owner)}`), [], "clearing can remove a disabled override without making its identity eligible");
     await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
     const duplicateRef = `txn_${"b".repeat(43)}`;
     await rules.observeTransactionIdentities(owner, [{ transaction_ref: duplicateRef, evidence: "duplicate", supported: false }, { transaction_ref: duplicateRef, evidence: "duplicate", supported: true }]);

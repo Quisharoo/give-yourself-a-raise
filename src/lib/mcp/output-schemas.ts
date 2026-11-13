@@ -164,7 +164,7 @@ function output(success: Schema): NonNullable<Tool["outputSchema"]> {
 export const OUTPUT_SCHEMAS = {
   upsert_classification_rule: output(object({ rule: z.toJSONSchema(financialRuleSchema, { target: "draft-7" }) })),
   delete_classification_rule: output(object({ id: string, deleted: boolean })),
-  set_transaction_override: output(object({ override: z.toJSONSchema(transactionOverrideSchema, { target: "draft-7" }) })),
+  set_transaction_override: output(object({ override: nullable(z.toJSONSchema(transactionOverrideSchema, { target: "draft-7" })) })),
   get_connection_status: output({
     anyOf: [
       object({ connected: { const: false }, connect_url: string, message: string }),

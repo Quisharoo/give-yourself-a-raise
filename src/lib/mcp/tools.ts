@@ -30,7 +30,7 @@ import {
 import {
   financialFilterShape,
   financialRuleSchema,
-  transactionOverrideSchema,
+  transactionOverrideInputSchema,
   type ClassificationSnapshot,
   type FinancialFilter,
 } from "@/lib/analysis/classification";
@@ -230,8 +230,8 @@ for (const [name, description, schema] of [
   ],
   [
     "set_transaction_override",
-    "Save one-off classification labels for a supported observed transaction_ref. Protected transfers, refunds and reversals retain their economic flow. Requires write:classifications.",
-    transactionOverrideSchema,
+    "Save one-off labels for a supported observed transaction_ref, or pass transaction_ref and labels:null to clear them and restore current rules. Protected transfers, refunds and reversals retain their economic flow. Requires write:classifications.",
+    transactionOverrideInputSchema,
   ],
 ] as const) {
   const security = [
@@ -241,9 +241,10 @@ for (const [name, description, schema] of [
     name,
     title: name.split("_").map(capitalize).join(" "),
     description,
-    inputSchema: ToolSchema.shape.inputSchema.parse(
-      z.toJSONSchema(schema, { target: "draft-7" }),
-    ),
+    inputSchema: ToolSchema.shape.inputSchema.parse({
+      ...z.toJSONSchema(schema, { target: "draft-7" }),
+      type: "object",
+    }),
     outputSchema: OUTPUT_SCHEMAS[name],
     annotations: {
       readOnlyHint: false,
@@ -354,10 +355,10 @@ async function executeTool(
         ),
       });
     }
-    const parsed = transactionOverrideSchema.safeParse(rawArguments);
+    const parsed = transactionOverrideInputSchema.safeParse(rawArguments);
     if (!parsed.success)
       throw new TransactionInputError(
-        "Invalid transaction override. Provide a transaction_ref and classification labels.",
+        "Invalid transaction override. Provide a transaction_ref with flat classification labels, or only transaction_ref and labels:null to clear.",
       );
     return toolSuccess({
       override: await dependencies.setTransactionOverride(subject, parsed.data),

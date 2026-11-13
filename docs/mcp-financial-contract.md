@@ -10,13 +10,13 @@ Bank reads require `read:bank_data`. These label tools require both `read:bank_d
 
 - `upsert_classification_rule` saves a rule by `id`.
 - `delete_classification_rule` deletes a rule by `id`.
-- `set_transaction_override` saves one-off labels for a supported observed `transaction_ref`.
+- `set_transaction_override` saves one-off labels for a supported observed `transaction_ref`. Pass only `transaction_ref` and `labels: null` to clear a one-off and resume current merchant rules or heuristic classification. A clear returns `override: null`, including when no override exists.
 
 The server checks the write permission before calling any classification storage function. Existing read tokens cannot change labels. Bank tools cannot move money.
 
 A rule matches either an exact canonical `merchant_key` or case-insensitive literal `merchant_text` in the merchant descriptor. Text is not a regular expression. Optional constraints are `exact_amount`, `except_amount`, `direction`, `account_ref`, and `zero_amount`. Amount constraints include currency and use decimal strings. Higher `priority` wins. Equal priorities use ascending rule ID. Inputs have bounded strings and reject unknown fields.
 
-Rules assign `purpose`, nullable `project`, and nullable `flow_kind`. Purpose is `business`, `personal`, or `unassigned`. Economic flows are `expense`, `income`, `revenue`, `refund`, `transfer`, and `unknown`. A one-off override wins purpose and project labels. Its flow cannot replace a protected transfer, refund, or reversal. Explicit merchant rules can identify external revenue carried by a generic funding code. Confirmed internal movement remains protected.
+Rules assign `purpose`, nullable `project`, and nullable `flow_kind`. Purpose is `business`, `personal`, or `unassigned`. Economic flows are `expense`, `income`, `revenue`, `refund`, `transfer`, and `unknown`. A one-off override wins purpose, project, and explicit flow labels over merchant rules and generic funding defaults. Its flow cannot replace bank-backed internal movement, a refund, or a reversal.
 
 Each MCP read loads one classification snapshot and uses it for transaction rows, exact totals, spending estimates, both comparison periods, and recurrence. Production snapshot reads select rules and supported overrides in one database statement. Changed classifications invalidate existing paging fingerprints.
 
@@ -38,9 +38,9 @@ For accounts with validated Enable Banking `identification_hash`, references use
 
 The provider documents `identification_hash` for matching accounts across sessions in its [API reference](https://enablebanking.com/docs/api/reference/). Local verification simulates a reconnect with rotated session and account IDs. It does not establish a real future provider reconnect outcome.
 
-The application retains only opaque references and hashes of observed identity evidence. It does not use merchant, date, or amount similarity to reconcile transactions. Duplicate bank identities and contradictory evidence disable overrides conservatively, including previously saved labels. No duplicate ordinal becomes an override identity.
+The application retains only opaque references and hashes of observed identity evidence. It does not use merchant, date, or amount similarity to reconcile transactions. Dashboard and MCP reads observe current bank identity evidence through the same policy before classification. Duplicate bank identities and contradictory evidence disable overrides conservatively, including previously saved labels. No duplicate ordinal becomes an override identity.
 
-Optional account details may be unavailable. Those accounts remain readable with session-bound references. Transactions with missing, duplicate, or conflicting identity evidence return `override_supported: false` and an explicit `override_reason`. The write tool refuses unsupported, unknown, or other-owner references. Account-filter rules using fallback session-bound references do not survive a reconnect.
+Optional account details may be unavailable. Those accounts remain readable with session-bound references. Transactions with missing, duplicate, or conflicting identity evidence return `override_supported: false` and an explicit `override_reason`. Supported identities return a null reason. Saving labels refuses unsupported, unknown, or other-owner references. Clearing deletes only the caller's stored override and can remove disabled labels without making an ambiguous identity eligible again. Account-filter rules using fallback session-bound references do not survive a reconnect.
 
 Cursors remain signed for the bank session, user, fixed query, result fingerprint, and 15-minute expiry. A reconnect requires restarting paging even when transaction references remain stable. No cursor database is used.
 

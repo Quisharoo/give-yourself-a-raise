@@ -1,7 +1,7 @@
 import { TransactionInputError } from "../transactions";
 import {
   financialRuleSchema,
-  transactionOverrideSchema,
+  transactionOverrideInputSchema,
   type FinancialRule,
   type TransactionOverride,
 } from "../analysis/classification";
@@ -65,7 +65,11 @@ export function syntheticPersistence(): Pick<
     deleteFinancialRule: async (subject, id) =>
       rules.get(subject)?.delete(id) ?? false,
     setTransactionOverride: async (subject, raw) => {
-      const override = transactionOverrideSchema.parse(raw);
+      const override = transactionOverrideInputSchema.parse(raw);
+      if ("labels" in override) {
+        overrides.get(subject)?.delete(override.transaction_ref);
+        return null;
+      }
       const identity = identities.get(
         identityKey(subject, override.transaction_ref),
       );

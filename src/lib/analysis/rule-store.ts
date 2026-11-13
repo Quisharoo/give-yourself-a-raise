@@ -3,6 +3,7 @@ import {
   financialRuleSchema,
   type FinancialRule,
   transactionOverrideSchema,
+  transactionOverrideInputSchema,
   type TransactionOverride,
   type ClassificationSnapshot,
 } from "./classification";
@@ -255,9 +256,13 @@ export async function observeTransactionIdentities(
     .parse(rows);
 }
 export async function setTransactionOverride(subject: string, raw: unknown) {
-  const override = transactionOverrideSchema.parse(raw);
+  const override = transactionOverrideInputSchema.parse(raw);
   await ensureSchema();
   const sql = database();
+  if ("labels" in override) {
+    await sql`DELETE FROM bank_transaction_overrides WHERE subject = ${subject} AND transaction_ref = ${override.transaction_ref}`;
+    return null;
+  }
   const { transaction_ref, ...labels } = override;
   const rows =
     await sql`INSERT INTO bank_transaction_overrides(subject, transaction_ref, labels)

@@ -1361,3 +1361,64 @@ test("MCP refuses duplicate and contradictory strong transaction identities with
     else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
   }
 });
+
+test("clearing a one-off restores current merchant rules and remains scoped, isolated and repeatable", async () => {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 37).toString("base64");
+  try {
+    const { dependencies } = syntheticBank();
+    dependencies.getSession = async () => ({ accounts: ["account"] });
+    dependencies.getAccountDetails = async () => ({ identification_hash: "clear-test-account", currency: "EUR" });
+    dependencies.getAllAccountTransactions = async () => [{
+      booking_date: "2026-01-15",
+      status: "BOOK",
+      entry_reference: "entry",
+      creditor: { name: "Amazon" },
+      credit_debit_indicator: "DBIT",
+      transaction_amount: { amount: "10.00", currency: "EUR" },
+    }];
+    const rule = {
+      id: "amazon", merchant_key: "amazon", priority: 100, direction: "debit",
+      except_amount: null, purpose: "personal", project: null, flow_kind: "expense",
+    };
+    await dependencies.upsertFinancialRule("owner", rule);
+    const read = async () => z.array(z.object({
+      transaction_ref: z.string(), purpose: z.string(), project: z.string().nullable(), classification_source: z.string(),
+    })).parse(content(await call(dependencies, "find_transactions", { ...range, detail: "full" })).transactions)[0];
+    const transaction_ref = (await read()).transaction_ref;
+    const labels = { transaction_ref, purpose: "business", project: "One off", flow_kind: "expense" };
+    const write = (args: Record<string, unknown>, subject = "owner", scopes = ["read:bank_data", "write:classifications"]) =>
+      invoke(dependencies, "tools/call", { name: "set_transaction_override", arguments: args }, subject, scopes);
+    assert.notEqual((await write(labels)).isError, true);
+    await dependencies.upsertFinancialRule("owner", { ...rule, project: "Updated rule" });
+    const clear = { transaction_ref, labels: null };
+    for (const scopes of [["read:bank_data"], ["write:classifications"], []]) {
+      const denied = await write(clear, "owner", scopes);
+      assert.equal(denied.isError, true);
+      assert.equal(z.object({ code: z.string() }).parse(content(denied).error).code, "insufficient_scope");
+    }
+    assert.equal((await read()).project, "One off");
+    for (const invalid of [{ ...clear, purpose: "personal" }, { ...clear, labels: {} }, { transaction_ref }])
+      assert.equal((await write(invalid)).isError, true);
+    assert.equal((await read()).project, "One off");
+    assert.deepEqual(content(await write(clear, "another-owner")), { override: null });
+    assert.equal((await read()).project, "One off");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const cleared = await write(clear);
+      assert.notEqual(cleared.isError, true);
+      assert.deepEqual(content(cleared), { override: null });
+      const restored = await read();
+      assert.equal(restored.purpose, "personal");
+      assert.equal(restored.project, "Updated rule");
+      assert.equal(restored.classification_source, "user_rule");
+    }
+    assert.equal(content(await call(dependencies, "get_transaction_totals", { ...range, purpose: "business" })).matched_count, 0);
+    assert.equal(content(await call(dependencies, "get_transaction_totals", { ...range, purpose: "personal" })).matched_count, 1);
+    await dependencies.deleteFinancialRule("owner", rule.id);
+    assert.equal((await read()).purpose, "unassigned");
+    assert.equal((await read()).classification_source, "family");
+  } finally {
+    if (previousKey === undefined) delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
+  }
+});
