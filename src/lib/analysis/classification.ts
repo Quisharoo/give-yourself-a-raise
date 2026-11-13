@@ -146,13 +146,11 @@ function redactIdentifiers(
 }
 const internalCodes = new Set([
   "EXCHANGE",
-  "CARD_TOPUP",
-  "TOPUP",
   "SAVINGS",
   "OWN_ACCOUNT",
   "INTERNAL_TRANSFER",
-  "MONEY_ADDED",
 ]);
+const fundingCodes = new Set(["CARD_TOPUP", "TOPUP", "MONEY_ADDED"]);
 const currencies = new Set(
   Intl.supportedValuesOf("currency").map((currency) => currency.toLowerCase()),
 );
@@ -229,26 +227,30 @@ export function normalizeTransaction(
   const event = transactionEventKind(transaction.bank_transaction_code);
   const code = transaction.bank_transaction_code?.code?.toUpperCase();
   const internal = isInternalMovement(transaction, rawDescriptor);
+  const funding = fundingCodes.has(code ?? "");
   let economicFlow: NormalizedTransaction["economicFlow"] = internal
     ? "transfer"
     : event === "refund"
       ? "refund"
       : event === "reversal"
         ? "unknown"
-        : signedAmount > 0
-          ? /\b(salary|payroll|wages)\b/.test(description)
-            ? "income"
-            : "unknown"
-          : classification.flowKind === "unknown"
-            ? "unknown"
-            : "expense";
+        : funding
+          ? "transfer"
+          : signedAmount > 0
+            ? /\b(salary|payroll|wages)\b/.test(description)
+              ? "income"
+              : "unknown"
+            : classification.flowKind === "unknown"
+              ? "unknown"
+              : "expense";
   const rule = [...rules]
     .sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id))
     .find(
       (candidate) =>
         candidate.merchant_key === identity.key &&
         (candidate.direction === "either" ||
-          candidate.direction === (signedAmount < 0 ? "debit" : "credit")) &&
+          candidate.direction ===
+            (transaction.credit_debit_indicator === "DBIT" ? "debit" : "credit")) &&
         !(
           candidate.except_amount &&
           candidate.except_amount.currency ===
@@ -260,12 +262,20 @@ export function normalizeTransaction(
         ),
     );
   if (
-    economicFlow !== "transfer" &&
+    !internal &&
     rule?.flow_kind &&
     event !== "refund" &&
     event !== "reversal"
   )
     economicFlow = rule.flow_kind;
+  if (funding && !internal && !rule?.flow_kind && economicFlow === "transfer")
+    classification = {
+      ...classification,
+      confidence: "low",
+      source: "heuristic",
+      reason:
+        "Generic funding code treated as a transfer without an explicit flow rule.",
+    };
   if (economicFlow === "transfer")
     classification = {
       ...classification,

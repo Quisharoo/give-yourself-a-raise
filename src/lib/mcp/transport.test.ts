@@ -688,7 +688,9 @@ test("one fixture produces the same owner/project totals across search, totals, 
   const examples: Array<[string, string, "CRDT" | "DBIT", string]> = [
     ["Awx*JoinBrands", "20.10", "DBIT", "CARD_PAYMENT"],
     ["Join Brands", "10.20", "DBIT", "CARD_PAYMENT"],
-    ["Apple Distribution International", "100.00", "CRDT", "TRANSFER"],
+    ["Join Brands", "0.00", "DBIT", "CARD_PAYMENT"],
+    ["Apple Distribution International", "100.00", "CRDT", "TOPUP"],
+    ["Apple Distribution", "25.25", "CRDT", "TOPUP"],
     ["Apple.com/bill", "19.99", "DBIT", "CARD_PAYMENT"],
     ["Apple.com/bill", "9.990", "DBIT", "CARD_PAYMENT"],
     ["Amazon*marketplace", "50", "DBIT", "CARD_PAYMENT"],
@@ -701,7 +703,7 @@ test("one fixture produces the same owner/project totals across search, totals, 
       creditor: { name: merchant },
       debtor: { name: merchant },
       credit_debit_indicator: direction,
-      bank_transaction_code: { code },
+      bank_transaction_code: { code, sub_code: null },
       entry_reference: `private-reference-${index}`,
       transaction_amount: { amount, currency: "EUR" },
     }));
@@ -709,14 +711,14 @@ test("one fixture produces the same owner/project totals across search, totals, 
   const found = content(
     await call(dependencies, "find_transactions", { ...range, ...filters }),
   );
-  assert.equal(found.matched_count, 3);
+  assert.equal(found.matched_count, 5);
   assert.deepEqual(found.totals, [
     {
       currency: "EUR",
-      count: 3,
+      count: 5,
       debit: "30.30",
-      credit: "100.00",
-      net: "69.70",
+      credit: "125.25",
+      net: "94.95",
     },
   ]);
   assert.deepEqual(found.classified_totals, [
@@ -724,7 +726,7 @@ test("one fixture produces the same owner/project totals across search, totals, 
       currency: "EUR",
       expense: "30.30",
       income: "0",
-      revenue: "100.00",
+      revenue: "125.25",
       refund: "0",
       transfer: "0",
       unknown: "0",
@@ -754,6 +756,30 @@ test("one fixture produces the same owner/project totals across search, totals, 
     assert.deepEqual(result.totals, found.totals);
     assert.deepEqual(result.classified_totals, found.classified_totals);
   }
+  const compactRows = z
+    .array(z.object({ transaction_ref: z.string() }))
+    .parse(found.transactions);
+  const full = content(
+    await call(dependencies, "find_transactions", {
+      ...range, ...filters, detail: "full",
+    }),
+  );
+  const fullRows = z.array(z.object({
+    transaction_ref: z.string(),
+    zero_amount: z.boolean(),
+    purpose: z.string(),
+    project: z.string(),
+    flow_kind: z.string(),
+  })).parse(full.transactions);
+  assert.deepEqual(
+    fullRows.map((row) => row.transaction_ref),
+    compactRows.map((row) => row.transaction_ref),
+  );
+  const zero = fullRows.filter((row) => row.zero_amount);
+  assert.equal(zero.length, 1);
+  assert.equal(zero[0].purpose, "business");
+  assert.equal(zero[0].project, "INCREMNT");
+  assert.equal(zero[0].flow_kind, "expense");
   const byRaw = content(
     await call(dependencies, "find_transactions", {
       ...range,

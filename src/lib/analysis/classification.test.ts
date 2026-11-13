@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeTransaction } from "./classification";
+import { normalizeTransaction, type FinancialRule } from "./classification";
 import { INITIAL_OWNER_RULES } from "./rule-store";
 import type { EnableBankingTransaction } from "../enable-banking/types";
 
@@ -153,3 +153,120 @@ test("generic transfer notes cannot establish an internal movement", () => {
     "revenue",
   );
 });
+
+test("owner payout rules identify external revenue carried by a generic funding code", () => {
+  const payout = {
+    ...row("Apple Distribution International", "100", "EUR", "CRDT", "TOPUP"),
+    bank_transaction_code: { code: "TOPUP", sub_code: null },
+  };
+  const result = normalizeTransaction("a", payout, INITIAL_OWNER_RULES);
+  assert.equal(result.matchedRuleId, "owner-apple-distribution");
+  assert.equal(result.purpose, "business");
+  assert.equal(result.project, "INCREMNT");
+  assert.equal(result.economicFlow, "revenue");
+});
+
+test("zero-amount rules use bank direction and preserve the zero amount", () => {
+  const debit = normalizeTransaction(
+    "a",
+    row("Join Brands", "0.00"),
+    INITIAL_OWNER_RULES,
+  );
+  assert.equal(debit.purpose, "business");
+  assert.equal(debit.project, "INCREMNT");
+  assert.equal(debit.matchedRuleId, "owner-join-brands");
+  assert.equal(debit.economicFlow, "expense");
+  assert.equal(debit.amountDecimal, "0.00");
+  const credit = normalizeTransaction(
+    "a",
+    row("Join Brands", "0.00", "EUR", "CRDT"),
+    INITIAL_OWNER_RULES,
+  );
+  assert.equal(credit.matchedRuleId, null);
+});
+
+const externalRule: FinancialRule = {
+  id: "custom-marketplace-revenue",
+  priority: 100,
+  merchant_key: "independent marketplace",
+  direction: "credit",
+  except_amount: null,
+  purpose: "business",
+  project: "Other project",
+  flow_kind: "revenue",
+};
+
+for (const code of ["TOPUP", "CARD_TOPUP", "MONEY_ADDED"]) {
+  for (const [sub_code, expected] of [
+    ["REFUND", "refund"],
+    ["REVERSAL", "unknown"],
+  ])
+    test(`${code} ${sub_code} takes precedence over funding defaults and flow rules`, () => {
+      const transaction = {
+        ...row("Independent Marketplace", "15.25", "EUR", "CRDT", code),
+        bank_transaction_code: { code, sub_code },
+      };
+      for (const rules of [[], [externalRule]]) {
+        const result = normalizeTransaction("a", transaction, rules);
+        assert.equal(result.economicFlow, expected);
+        assert.doesNotMatch(result.classification.reason, /funding/i);
+      }
+    });
+  test(`${code} permits an explicit external flow rule without a merchant-specific branch`, () => {
+    const transaction = row(
+      "Independent Marketplace", "15.25", "EUR", "CRDT", code,
+    );
+    const before = normalizeTransaction("a", transaction);
+    for (const flow_kind of ["revenue", "income"] as const) {
+      const result = normalizeTransaction("a", transaction, [
+        { ...externalRule, flow_kind },
+      ]);
+      assert.equal(result.economicFlow, flow_kind);
+      assert.equal(result.matchedRuleId, externalRule.id);
+      assert.equal(result.sourceKey, before.sourceKey);
+    }
+  });
+  for (const direction of ["DBIT", "CRDT"] as const)
+    test(`${code} ${direction} without an explicit flow rule remains a heuristic transfer`, () => {
+      const transaction = row(
+        "Independent Marketplace", "15.25", "EUR", direction, code,
+      );
+      for (const rules of [
+        [],
+        [{ ...externalRule, direction: "either" as const, flow_kind: null }],
+      ]) {
+        const result = normalizeTransaction("a", transaction, rules);
+        assert.equal(result.economicFlow, "transfer");
+        assert.equal(result.classification.flowKind, "wealth_flow");
+        assert.equal(result.classification.source, "heuristic");
+        assert.equal(result.classification.confidence, "low");
+        assert.match(result.classification.reason, /funding/i);
+      }
+    });
+}
+
+for (const code of ["EXCHANGE", "OWN_ACCOUNT", "INTERNAL_TRANSFER", "SAVINGS"])
+  test(`${code} cannot be overridden by an explicit external revenue rule`, () => {
+    const result = normalizeTransaction(
+      "a",
+      row("Independent Marketplace", "15.25", "EUR", "CRDT", code),
+      [externalRule],
+    );
+    assert.equal(result.matchedRuleId, externalRule.id);
+    assert.equal(result.economicFlow, "transfer");
+  });
+
+for (const descriptor of [
+  "To EUR", "From Instant Access Savings", "Card top-up", "Own account transfer",
+])
+  for (const field of ["note", "remittance_information"] as const)
+    test(`confirmed ${field} ${descriptor} protects TOPUP from an external revenue rule`, () => {
+      const transaction = row(
+        "Independent Marketplace", "15.25", "EUR", "CRDT", "TOPUP",
+      );
+      if (field === "note") transaction.note = descriptor;
+      else transaction.remittance_information = [descriptor];
+      const result = normalizeTransaction("a", transaction, [externalRule]);
+      assert.equal(result.matchedRuleId, externalRule.id);
+      assert.equal(result.economicFlow, "transfer");
+    });
