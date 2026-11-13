@@ -1,5 +1,3 @@
-import { SignInButton } from "@clerk/nextjs";
-
 import { hasAuthConfig } from "@/lib/auth/session";
 import { getSafeNextPath } from "@/lib/auth/paths";
 import { hasClerkConfig } from "@/lib/auth/clerk";
@@ -29,17 +27,15 @@ export default async function LoginPage({
             Sign in before running the bank connection flow
           </h1>
           <p className="max-w-2xl text-sm leading-6 text-[var(--muted)]">
-            This deployment is intentionally restricted while the Revolut consent and callback flow is
-            being tested on a real device.
+            Sign in to access your private bank connection. For Revolut credit-card access, start
+            here on your phone and complete approval in the Revolut app.
           </p>
         </div>
 
         {clerkConfigured ? (
-          <SignInButton forceRedirectUrl={next} mode="modal">
-            <button className="button button-primary w-full sm:w-fit" type="button">
+          <a className="button button-primary w-full sm:w-fit" href={`/auth/sign-in?next=${encodeURIComponent(next)}`}>
               Continue securely
-            </button>
-          </SignInButton>
+          </a>
         ) : null}
 
         {!clerkConfigured && !isConfigured ? (
