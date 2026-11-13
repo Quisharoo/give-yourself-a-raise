@@ -566,7 +566,7 @@ test("MCP summary and search accept nullable provider dates with exact values an
         }),
       )
       .parse(output.data_status);
-    assert.equal(statuses.length, 2);
+    assert.equal(statuses.length, output === summary ? 2 : 1);
     assert.deepEqual(
       statuses.find((row) => row.resource === "transactions")?.last_success,
       {
@@ -580,7 +580,7 @@ test("MCP summary and search accept nullable provider dates with exact values an
     assert.equal(
       statuses.find((row) => row.resource === "balances")?.last_success
         .returned_count,
-      1,
+      output === summary ? 1 : undefined,
     );
   }
 });
@@ -1229,16 +1229,19 @@ test("MCP excludes persisted legacy observations from bounded transaction result
   assert.deepEqual(persisted.slice(0, legacy.length), legacy);
   const status = content(await call(dependencies, "get_connection_status", {}));
   assert.deepEqual(status.data_status, output.data_status);
-  const selected = content(await call(dependencies, "get_account_summary", {
+  const selected = content(await call(dependencies, "find_transactions", {
     ...range,
     account_refs: [current[0].account_ref],
+    limit: 1,
   }));
   assert.deepEqual(
     observations.parse(selected.data_status).map((row) => [row.account_ref, row.resource]),
-    [[current[0].account_ref, "transactions"], [current[0].account_ref, "balances"]],
+    [[current[0].account_ref, "transactions"]],
   );
+  const summary = content(await call(dependencies, "get_account_summary", range));
+  assert.equal(observations.parse(summary.data_status).length, 8);
   const withBalances = content(await call(dependencies, "get_connection_status", {}));
-  assert.equal(observations.parse(withBalances.data_status).length, 5);
+  assert.deepEqual(withBalances.data_status, summary.data_status);
   dependencies.getSession = async () => ({
     accounts: ["account-one", "account-two", "account-three", "account-four"],
     access: { valid_until: "2020-01-01T00:00:00Z" },

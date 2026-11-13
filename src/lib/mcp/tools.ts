@@ -412,6 +412,16 @@ async function executeTool(
       ),
     ),
   };
+  async function currentAccountObservations() {
+    const currentRefs = new Set(
+      session.accounts.map((account) =>
+        accountRef(scope, typeof account === "string" ? account : account.uid),
+      ),
+    );
+    return (await dependencies.getAccountFetchObservations(connection)).filter(
+      (observation) => currentRefs.has(observation.account_ref),
+    );
+  }
   if (name === "get_connection_status")
     return connectionSuccess({
       connected: true,
@@ -421,13 +431,13 @@ async function executeTool(
       country: connection.country,
       provider: connection.provider,
       reconnect_url: new URL("/", appBaseUrl).toString(),
-      data_status: await dependencies.getAccountFetchObservations(connection),
+      data_status: await currentAccountObservations(),
     });
   if (consent.state === "expired")
     throw new BankReadError(
       "consent_expired",
       "Bank consent has expired. Reconnect your bank.",
-      await dependencies.getAccountFetchObservations(connection),
+      await currentAccountObservations(),
     );
   const rules: ClassificationSnapshot = dependencies.getClassificationSnapshot
     ? await dependencies.getClassificationSnapshot(subject)
