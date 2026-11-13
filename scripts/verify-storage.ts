@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import type { FinancialRule } from "../src/lib/analysis/classification";
 import type {
+  AccountFetchObservation,
   FetchAttempt,
   FetchRequest,
   FetchSuccess,
@@ -443,11 +444,13 @@ async function main() {
       null,
       "reconnection does not inherit prior coverage",
     );
+    assert.equal(observations[0]?.broad_success, null);
     await store.finishAccountFetch(nextAttempt, { success });
     assert.equal(
       (await store.getAccountFetchObservations(replacement))[0]?.last_result,
       "running",
     );
+    assert.equal((await store.getAccountFetchObservations(replacement))[0]?.broad_success, null, "old generation cannot update broad coverage");
     assert.equal(
       await store.deleteBankConnection(owner, originalSession),
       false,
@@ -594,6 +597,54 @@ async function main() {
     const durable = (await store.getAccountFetchObservations(otherConnection)).find((row) => row.account_ref === "acc_broad");
     assert.deepEqual(durable?.last_success, narrow);
     assert.deepEqual(durable?.broad_success, wide, "narrow reads cannot replace broad coverage");
+
+    for (const lateBroad of [true, false]) {
+      const broad = { ...broadAttempt, accountRef: `acc_rolling_${lateBroad}`, attemptId: "initial-broad" };
+      const readCoverage = async (): Promise<AccountFetchObservation | undefined> =>
+        (await store.getAccountFetchObservations(otherConnection)).find((row) => row.account_ref === broad.accountRef);
+      const initial = { ...wide, date_from: "2025-11-13" };
+      const currentNarrow = { ...broad, attemptId: "latest-narrow" };
+      await store.beginAccountFetch(broad, initial);
+      if (!lateBroad) await store.finishAccountFetch(broad, { success: initial });
+      await store.beginAccountFetch(currentNarrow, narrow);
+      await store.finishAccountFetch(currentNarrow, { success: narrow });
+      const beforeBroad = await readCoverage();
+      if (lateBroad) await store.finishAccountFetch(broad, { success: initial });
+      const afterBroad = await readCoverage();
+      assert.deepEqual(afterBroad, { ...beforeBroad, broad_success: initial }, "late broad completion advances only broad coverage");
+
+      const rolling = { ...initial, date_from: "2025-11-14", date_to: "2026-11-14", completed_at: "2026-11-14T12:00:00Z" };
+      const rollingAttempt = { ...broad, attemptId: "rolling-broad" };
+      await store.beginAccountFetch(rollingAttempt, rolling);
+      await store.finishAccountFetch(rollingAttempt, { success: rolling });
+      const rolled = await readCoverage();
+      assert.deepEqual(rolled?.broad_success, rolling, "a rolling 366-day window replaces yesterday's full window");
+
+      const rejectedWindows: Array<[string, FetchSuccess]> = [
+        ["narrow", { ...rolling, date_from: "2026-11-14", date_to: "2026-11-15" }],
+        ["status", { ...rolling, date_from: "2025-11-01", date_to: "2026-11-15", status: "BOOK" }],
+        ["stale", { ...rolling, date_from: "2025-11-01", completed_at: initial.completed_at }],
+        ["older-end", { ...rolling, date_from: "2025-11-01", date_to: "2026-11-13" }],
+      ];
+      for (const [name, candidate] of rejectedWindows) {
+        const candidateAttempt = { ...broad, attemptId: `candidate-${name}` };
+        await store.beginAccountFetch(candidateAttempt, candidate);
+        await store.finishAccountFetch(candidateAttempt, { success: candidate });
+        const rejected = await readCoverage();
+        assert.deepEqual(rejected?.broad_success, rolling, `${name} cannot replace broad coverage`);
+      }
+
+      const newest = { ...rolling, date_from: "2025-11-15", date_to: "2026-11-15", completed_at: "2026-11-15T12:00:00Z" };
+      const newestAttempt = { ...broad, attemptId: "newest-broad" };
+      const failedAttempt = { ...broad, attemptId: "latest-failure" };
+      await store.beginAccountFetch(newestAttempt, newest);
+      await store.beginAccountFetch(failedAttempt, narrow);
+      await store.finishAccountFetch(failedAttempt, { errorCode: "provider_unavailable" });
+      const failed = await readCoverage();
+      await store.finishAccountFetch(newestAttempt, { success: newest });
+      const afterFailure = await readCoverage();
+      assert.deepEqual(afterFailure, { ...failed, broad_success: newest }, "late broad success preserves the latest failed attempt and last success");
+    }
 
     await sql`DELETE FROM bank_financial_rules WHERE subject = ${owner}`;
     await sql`DELETE FROM bank_classification_migrations WHERE subject = ${owner}`;

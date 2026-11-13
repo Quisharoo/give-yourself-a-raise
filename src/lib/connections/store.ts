@@ -244,18 +244,22 @@ export async function finishAccountFetch(
   await ensureConnectionSchema();
   const successJson = "success" in result ? JSON.stringify(result.success) : null;
   await sql`UPDATE bank_account_fetches SET
-      last_result = ${"success" in result ? "success" : "failed"},
-      error_code = ${"errorCode" in result ? result.errorCode : null},
-      last_success = CASE WHEN ${"success" in result} THEN ${successJson}::jsonb ELSE last_success END,
+      last_result = CASE WHEN attempt_id = ${attempt.attemptId} THEN ${"success" in result ? "success" : "failed"} ELSE last_result END,
+      error_code = CASE WHEN attempt_id = ${attempt.attemptId} THEN ${"errorCode" in result ? result.errorCode : null} ELSE error_code END,
+      last_success = CASE WHEN attempt_id = ${attempt.attemptId} AND ${"success" in result} THEN ${successJson}::jsonb ELSE last_success END,
       broad_success = CASE WHEN ${"success" in result} AND (
-        broad_success IS NULL OR resource = 'balances' OR (
-          (${successJson}::jsonb->>'date_from') <= (broad_success->>'date_from')
-          AND (${successJson}::jsonb->>'date_to') >= (broad_success->>'date_to')
-          AND ((${successJson}::jsonb->>'status') = 'all' OR (${successJson}::jsonb->>'status') = (broad_success->>'status'))
+        broad_success IS NULL OR (
+          (${successJson}::jsonb->>'completed_at')::timestamptz >= (broad_success->>'completed_at')::timestamptz
+          AND (resource = 'balances' OR (
+            (${successJson}::jsonb->>'date_to')::date >= (broad_success->>'date_to')::date
+            AND (${successJson}::jsonb->>'date_to')::date - (${successJson}::jsonb->>'date_from')::date
+              >= (broad_success->>'date_to')::date - (broad_success->>'date_from')::date
+            AND ((${successJson}::jsonb->>'status') = 'all' OR (${successJson}::jsonb->>'status') = (broad_success->>'status'))
+          ))
         )
       ) THEN ${successJson}::jsonb ELSE broad_success END
     WHERE subject = ${attempt.connection.subject} AND connection_id = ${attempt.connection.connectionId}
-      AND account_ref = ${attempt.accountRef} AND resource = ${attempt.resource} AND attempt_id = ${attempt.attemptId}
+      AND account_ref = ${attempt.accountRef} AND resource = ${attempt.resource}
       AND EXISTS (SELECT 1 FROM bank_connections c WHERE c.subject = bank_account_fetches.subject AND c.connection_id = bank_account_fetches.connection_id)
   `;
 }

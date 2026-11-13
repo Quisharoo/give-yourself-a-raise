@@ -54,7 +54,7 @@ For a `BOOK` request, `pending` reports separate `PDNG` totals with the same dat
 
 ## Freshness and recurrence
 
-Fetch metadata records the last attempt and `last_success`. A failed attempt preserves successful coverage. `broad_success` retains successful date and status coverage when a later read is narrower. A replacement connection starts a new generation. Request dates, status, pagination completion, observed dates, and unknown history completeness remain explicit.
+Fetch metadata records the last attempt and `last_success`. A failed attempt preserves successful coverage. Only the latest attempt updates that state. A broad read can finish after a newer narrow attempt and independently advance `broad_success` within the same connection generation. A replacement window must finish no earlier, end no earlier, cover at least as many days, and include the previous status coverage. Daily rolling history windows qualify. The watermark describes one actual read and never combines separate windows. A replacement connection starts a new generation. Request dates, status, pagination completion, observed dates, and unknown history completeness remain explicit.
 
 Recurring analysis consumes booked expenses and request-local successful fetch evidence. It groups streams by account, merchant, currency, purpose, and project. Weekly, fortnightly, monthly, and quarterly inference require at least three observations. Annual inference permits two. Supported concurrent amount streams can separate bills from one merchant. Month-end calendar addition clamps to the last valid day.
 
