@@ -23,6 +23,7 @@ test("publishes the private Revolut tool set", () => {
       "get_account_summary",
       "summarize_spending",
       "find_transactions",
+      "get_transaction_totals",
       "compare_spending_periods",
     ],
   );

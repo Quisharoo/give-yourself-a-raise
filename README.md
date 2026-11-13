@@ -10,7 +10,7 @@ Diagnosis-first spending analysis on top of Enable Banking, available as a priva
 - separates `behavioural spend` from `wealth flow`
 - keeps `fixed costs` as context instead of fake cut opportunities
 - ranks a small set of high-confidence spending levers
-- exposes five OAuth-protected MCP tools for private ChatGPT conversations
+- exposes six OAuth-protected MCP tools for private ChatGPT conversations
 - encrypts the stored Enable Banking session ID and binds it to the signed-in user
 
 ## Current Product Shape
@@ -50,9 +50,42 @@ This repo is not a budgeting dashboard. The core promise is:
 - `get_account_summary`
 - `summarize_spending`
 - `find_transactions`
+- `get_transaction_totals`
 - `compare_spending_periods`
 
-Tool results deliberately exclude IBANs, bank account IDs, raw provider payloads, and Enable Banking session IDs.
+Tool results exclude IBANs, bank account IDs, raw provider payloads, and Enable Banking session IDs.
+
+`get_account_summary` returns an opaque `account_ref` for each account. `find_transactions`, `get_transaction_totals`, `summarize_spending`, and `compare_spending_periods` accept an optional nonempty `account_refs` array. Omit it to include all linked accounts. References belong to the authenticated user and current bank consent. Unknown references fail before account data is fetched.
+
+For example, `find_transactions` accepts the following arguments. Replace the reference with one from `get_account_summary`.
+
+```json
+{
+  "account_refs": ["acc_reference_from_get_account_summary"],
+  "date_from": "2026-10-01",
+  "date_to": "2026-10-31",
+  "merchant": "coffee",
+  "min_amount": "0.10",
+  "status": "BOOK",
+  "limit": 50
+}
+```
+
+Search and totals share date, merchant, category, absolute `min_amount`, absolute `max_amount`, account, and status filters. Amount bounds accept numbers or exact decimal strings. Dates must be real calendar dates, ordered, and at most 366 days apart. Dates default to the last 30 days.
+
+`find_transactions` returns at most 50 rows per page, with a default of 20. Pass `next_cursor` as `cursor` for the next page. Other filters may be omitted or repeated unchanged. Cursors freeze default dates, expire 15 minutes after the first page, and bind the query to the user and bank session. Every continuation refetches the bank data. A changed result requires restarting the search. Duplicate-looking rows remain separate and receive opaque `transaction_ref` values. Provider `transaction_id` is not treated as a stable identity.
+
+`get_transaction_totals` accepts the same filters without `limit` or `cursor` and returns no transaction rows. Both tools calculate totals across every matching bank-returned row before pagination. Each currency has decimal-string `debit`, `credit`, and signed `net` totals. Debit and credit are magnitudes. No currencies are combined. A row's signed `amount_decimal` is authoritative; `provider_amount_decimal` preserves the bank's original decimal text. Numeric `amount` remains for compatibility and can lose precision. Direction comes from `CRDT` or `DBIT`, independently of the provider amount's sign. Malformed amounts or directions fail with a safe error.
+
+These are exact sums of available bank-returned rows. They do not guarantee complete bank history or reconcile a card balance. The provider client follows continuation pages, including empty pages, and rejects repeated continuation keys.
+
+Search and totals default to `BOOK`. Supported bank statuses are `BOOK`, `CNCL`, `HOLD`, `OTHR`, `PDNG`, `RJCT`, and `SCHD`. Missing or unrecognized status becomes local `UNKNOWN`, never booked. Explicit bank codes are forwarded to the provider and enforced locally. `all` and `UNKNOWN` omit the provider status filter. `all` includes available returned statuses, with `status_counts` and `totals_by_status` so pending amounts remain distinguishable from settled amounts.
+
+Rows include `status`, `zero_amount`, and `event_kind`. Zero amount does not establish an authorization, and a credit does not establish a refund. Only self-describing refund or reversal bank codes produce those event hints. Other codes remain `unknown`; live provider code availability is unverified.
+
+Monthly summaries and comparisons use only `BOOK` rows and expose counts of excluded statuses. Existing monthly fields remain projections and carry an estimate label. They are separate from exact period totals.
+
+Account references, transaction references, and cursors use purpose-separated HMAC-SHA256 signatures. The server-only bank session ID is the signing key and the authenticated subject is part of the signed input. A new bank consent invalidates old references and cursors. No additional environment secret or stored transaction snapshot is needed.
 
 ## Analysis Rules
 
