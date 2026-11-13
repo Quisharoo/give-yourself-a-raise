@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
       headers: [
         { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
         { key: "X-Content-Type-Options", value: "nosniff" },
-        { key: "Referrer-Policy", value: "no-referrer" },
+        { key: "Referrer-Policy", value: "same-origin" },
       ],
     }];
   },
