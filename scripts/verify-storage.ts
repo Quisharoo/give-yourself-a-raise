@@ -28,58 +28,6 @@ const commandEnv = {
 const owner = "storage-verification-owner";
 const otherOwner = "storage-verification-other-owner";
 const nullMarker = `null-${randomUUID()}`;
-const expectedRules = [
-  {
-    id: "owner-apple-business",
-    priority: 100,
-    merchant_key: "apple",
-    direction: "debit",
-    except_amount: { currency: "EUR", amount: "9.99" },
-    purpose: "business",
-    project: null,
-    flow_kind: "expense",
-  },
-  {
-    id: "owner-join-brands",
-    priority: 100,
-    merchant_key: "join_brands",
-    direction: "debit",
-    except_amount: null,
-    purpose: "business",
-    project: "INCREMNT",
-    flow_kind: "expense",
-  },
-  {
-    id: "owner-amazon",
-    priority: 100,
-    merchant_key: "amazon",
-    direction: "either",
-    except_amount: null,
-    purpose: "personal",
-    project: null,
-    flow_kind: null,
-  },
-  {
-    id: "owner-amazon-prime",
-    priority: 100,
-    merchant_key: "amazon_prime",
-    direction: "either",
-    except_amount: null,
-    purpose: "personal",
-    project: null,
-    flow_kind: null,
-  },
-  {
-    id: "owner-apple-distribution",
-    priority: 100,
-    merchant_key: "apple_distribution",
-    direction: "credit",
-    except_amount: null,
-    purpose: "business",
-    project: "INCREMNT",
-    flow_kind: "revenue",
-  },
-] satisfies FinancialRule[];
 
 function parseCsv(output: string): SqlRow[] {
   const records: string[][] = [];
@@ -118,8 +66,9 @@ function parseCsv(output: string): SqlRow[] {
       headers.map((header, index) => {
         const value = columns[index];
         if (value === nullMarker) return [header, null];
+        if (header === "ambiguous") return [header, value === "t"];
         if (
-          ["request", "last_success", "rule"].includes(header) &&
+          ["request", "last_success", "broad_success", "rule", "labels", "rules", "overrides"].includes(header) &&
           value !== undefined
         ) {
           const parsed: unknown = JSON.parse(value);
@@ -222,7 +171,7 @@ async function main() {
     return rows;
   }
 
-  let restoreNeon = () => {};
+  let restoreNeon = () => { };
   try {
     mkdirSync(socketDirectory, { mode: 0o700 });
     assert(
@@ -380,6 +329,7 @@ async function main() {
           error_code: null,
           request,
           last_success: success,
+          broad_success: success,
         },
       ],
       "success metadata roundtrips exactly",
@@ -554,6 +504,10 @@ async function main() {
     const rules: typeof import("../src/lib/analysis/rule-store") = appRequire(
       "./src/lib/analysis/rule-store.ts",
     );
+    const expectedRules = rules.INITIAL_OWNER_RULES;
+    assert.equal(expectedRules.length, 21);
+    assert.equal(expectedRules[0].project, "INCREMNT");
+    assert.equal(expectedRules[0].zero_amount, false);
     const sortedRules = [...expectedRules].sort((left, right) =>
       left.id.localeCompare(right.id),
     );
@@ -608,6 +562,53 @@ async function main() {
       ),
       [{ subject: owner, count: String(expectedRules.length) }],
     );
+    assert.equal(await rules.deleteFinancialRule(owner, "owner-cursor"), true);
+    assert.equal(await rules.deleteFinancialRule(owner, "owner-cursor"), false);
+    assert.equal((await rules.listFinancialRules(owner)).some((rule) => rule.id === "owner-cursor"), false, "deleted seeds stay deleted");
+    const custom: FinancialRule = { id: "user-literal", priority: 200, merchant_text: "Test *literal", direction: "debit", except_amount: null, exact_amount: { currency: "EUR", amount: "10.00" }, purpose: "business", project: "Test", flow_kind: "expense" };
+    await rules.upsertFinancialRule(owner, custom);
+    assert.deepEqual((await rules.listFinancialRules(owner)).find((rule) => rule.id === custom.id), custom);
+    assert.equal((await rules.listFinancialRules(otherOwner)).length, 0);
+    const transaction_ref = `txn_${"a".repeat(43)}`;
+    const oneOff = { transaction_ref, purpose: "business", project: "Test", flow_kind: "expense" } as const;
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref, evidence: "evidence-one", supported: true }]);
+    await rules.setTransactionOverride(owner, oneOff);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [oneOff]);
+    await assert.rejects(rules.setTransactionOverride(otherOwner, oneOff), /Override refused/);
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref, evidence: "evidence-two", supported: true }]);
+    assert.deepEqual((await rules.getClassificationSnapshot(owner)).overrides, [], "conflicting evidence disables existing override");
+    await assert.rejects(rules.setTransactionOverride(owner, oneOff), /Override refused/);
+    const duplicateRef = `txn_${"b".repeat(43)}`;
+    await rules.observeTransactionIdentities(owner, [{ transaction_ref: duplicateRef, evidence: "duplicate", supported: false }, { transaction_ref: duplicateRef, evidence: "duplicate", supported: true }]);
+    await assert.rejects(rules.setTransactionOverride(owner, { ...oneOff, transaction_ref: duplicateRef }), /Override refused/);
+
+    const broadAttempt = { ...otherAttempt, accountRef: "acc_broad", attemptId: "broad" };
+    const wide = { ...success, date_from: "2026-01-01", date_to: "2026-11-13", status: "all" };
+    await store.beginAccountFetch(broadAttempt, wide);
+    await store.finishAccountFetch(broadAttempt, { success: wide });
+    const narrowAttempt = { ...broadAttempt, attemptId: "narrow" };
+    const narrow = { ...success, date_from: "2026-11-13", date_to: "2026-11-13", status: "BOOK" };
+    await store.beginAccountFetch(narrowAttempt, narrow);
+    await store.finishAccountFetch(narrowAttempt, { success: narrow });
+    const durable = (await store.getAccountFetchObservations(otherConnection)).find((row) => row.account_ref === "acc_broad");
+    assert.deepEqual(durable?.last_success, narrow);
+    assert.deepEqual(durable?.broad_success, wide, "narrow reads cannot replace broad coverage");
+
+    await sql`DELETE FROM bank_financial_rules WHERE subject = ${owner}`;
+    await sql`DELETE FROM bank_classification_migrations WHERE subject = ${owner}`;
+    const legacyApple = { ...expectedRules[0], project: null };
+    delete legacyApple.zero_amount;
+    const editedAmazon = { ...expectedRules[2], purpose: "business", project: "Owner edit" };
+    for (const rule of [legacyApple, editedAmazon]) await sql`INSERT INTO bank_financial_rules(subject, rule_id, rule) VALUES (${owner}, ${rule.id}, ${JSON.stringify(rule)}::jsonb)`;
+    const migrated = await rules.listFinancialRules(owner);
+    assert.deepEqual(migrated.find((rule) => rule.id === "owner-apple-business"), expectedRules[0], "unchanged legacy Apple is repaired");
+    assert.deepEqual(migrated.find((rule) => rule.id === "owner-amazon"), editedAmazon, "legacy user edits survive migration");
+    assert.equal(migrated.some((rule) => rule.id === "owner-amazon-prime"), false, "missing legacy seeds are not recreated");
+    assert(migrated.some((rule) => rule.id === "owner-cursor"), "new migration seeds missing INCREMNT merchants");
+    const migrationCount = query(`SELECT count(*)::text AS count FROM bank_classification_migrations WHERE subject = ${quoteSql(owner)}`);
+    assert.deepEqual(migrationCount, [{ count: "1" }]);
+
   } finally {
     restoreNeon();
     for (const [key, value] of Object.entries(savedEnv)) {

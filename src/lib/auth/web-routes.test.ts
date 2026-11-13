@@ -41,7 +41,7 @@ replaceExports("../connections/store", {
     return true;
   },
 });
-replaceExports("../analysis/rule-store", { listFinancialRules: async () => [] });
+replaceExports("../analysis/rule-store", { listFinancialRules: async () => [], getClassificationSnapshot: async (subject: string) => ({ subject, rules: [], overrides: [] }) });
 replaceExports("../enable-banking/client", {
   hasEnableBankingConfig: () => true,
   getSessionOverview: async (sessionId: string) => {

@@ -3,15 +3,17 @@ import { NextResponse } from "next/server";
 
 import { getWebUserSubject } from "@/lib/auth/web-user";
 import { getBankConnection } from "@/lib/connections/store";
-import { listFinancialRules } from "@/lib/analysis/rule-store";
-import { dateRange } from "@/lib/mcp/transaction-query";
+import { getClassificationSnapshot } from "@/lib/analysis/rule-store";
+import { accountRef, dateRange } from "@/lib/mcp/transaction-query";
 import { analyzeSpending } from "@/lib/analysis/engine";
 import {
   EnableBankingError,
   extractPsuHeaders,
   getSessionOverview,
+  getAccountDetails,
   hasEnableBankingConfig,
 } from "@/lib/enable-banking/client";
+import { bankAccountIdentity } from "@/lib/transactions-identity";
 import { writeEnableBankingCapture } from "@/lib/enable-banking/local-capture";
 
 export const runtime = "nodejs";
@@ -19,21 +21,31 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   try {
     const subject = await getWebUserSubject(request);
-    if (!subject) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    if (!subject)
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     if (!hasEnableBankingConfig()) {
-      return NextResponse.json({ error: "Enable Banking is not configured." }, { status: 503 });
+      return NextResponse.json(
+        { error: "Enable Banking is not configured." },
+        { status: 503 },
+      );
     }
     const connection = await getBankConnection(subject);
     if (!connection) {
-      return NextResponse.json({ error: "No bank connection found." }, { status: 404 });
+      return NextResponse.json(
+        { error: "No bank connection found." },
+        { status: 404 },
+      );
     }
     const sessionId = connection.sessionId;
 
     const dateFrom =
       request.nextUrl.searchParams.get("dateFrom")?.trim() ??
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 90).toISOString().slice(0, 10);
+      new Date(Date.now() - 1000 * 60 * 60 * 24 * 90)
+        .toISOString()
+        .slice(0, 10);
     const dateTo =
-      request.nextUrl.searchParams.get("dateTo")?.trim() ?? new Date().toISOString().slice(0, 10);
+      request.nextUrl.searchParams.get("dateTo")?.trim() ??
+      new Date().toISOString().slice(0, 10);
 
     const overview = await getSessionOverview(
       sessionId,
@@ -45,8 +57,47 @@ export async function GET(request: NextRequest) {
       extractPsuHeaders(request.headers),
     );
 
+    await Promise.all(
+      overview.accounts.map(async (account) => {
+        try {
+          const details = await getAccountDetails(
+            account.accountId,
+            extractPsuHeaders(request.headers),
+          );
+          account.stableIdentity = bankAccountIdentity(
+            connection.provider,
+            connection.country,
+            details,
+          ).stableIdentity;
+        } catch {}
+      }),
+    );
+    const identities = overview.accounts.map(
+      (account) => account.stableIdentity,
+    );
+    for (const account of overview.accounts)
+      if (
+        identities.filter((identity) => identity === account.stableIdentity)
+          .length > 1
+      )
+        account.stableIdentity = undefined;
+    const accountIdentities = Object.fromEntries(
+      overview.accounts.flatMap((account) =>
+        account.stableIdentity
+          ? [[account.accountId, account.stableIdentity]]
+          : [],
+      ),
+    );
+    for (const account of overview.accounts)
+      account.classificationAccountRef = accountRef(
+        { subject, sessionId, accountIdentities },
+        account.accountId,
+      );
     const range = dateRange(dateFrom, dateTo);
-    const analysis = analyzeSpending(overview.accounts, { rules: await listFinancialRules(subject), windowDays: range.windowDays });
+    const analysis = analyzeSpending(overview.accounts, {
+      rules: await getClassificationSnapshot(subject),
+      windowDays: range.windowDays,
+    });
 
     await Promise.all([
       writeEnableBankingCapture("analysis-input-overview", {
@@ -68,7 +119,9 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    return NextResponse.json(analysis, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(analysis, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     if (error instanceof EnableBankingError) {
       return NextResponse.json(

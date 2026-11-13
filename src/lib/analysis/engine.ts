@@ -1,4 +1,4 @@
-import { normalizeTransaction, type NormalizedTransaction, type FinancialRule, matchesFinancialFilter, type FinancialFilter } from "@/lib/analysis/classification";
+import { normalizeTransaction, normalizeAccountTransactions, type NormalizedTransaction, type ClassificationInput, matchesFinancialFilter, type FinancialFilter } from "@/lib/analysis/classification";
 import {
   transactionStatus,
   transactionStatusCounts,
@@ -38,13 +38,12 @@ const ONE_OFF_THRESHOLD = 100;
 
 export function analyzeSpending(
   accounts: EnableBankingAccountSnapshot[],
-  options: { windowDays?: number; rules?: FinancialRule[]; filters?: FinancialFilter } = {},
+  options: { windowDays?: number; rules?: ClassificationInput; filters?: FinancialFilter } = {},
 ): SpendingAnalysis {
   const windowDays = normalizeWindowDays(options.windowDays);
   const normalized = accounts.flatMap((account) =>
-    account.transactions
-      .filter((transaction) => transactionStatus(transaction.status) === "BOOK")
-      .map((transaction) => normalizeTransaction(account.accountId, transaction, options.rules)),
+    normalizeAccountTransactions(account, options.rules)
+      .filter((row) => transactionStatus(row.transaction.status) === "BOOK"),
   ).filter((row) => matchesFinancialFilter(row, options.filters));
 
   const statusCounts = transactionStatusCounts(

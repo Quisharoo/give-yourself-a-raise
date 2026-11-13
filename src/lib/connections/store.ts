@@ -166,6 +166,7 @@ async function createSchema() {
       PRIMARY KEY (subject, account_ref, resource)
     )
   `;
+  await sql`ALTER TABLE bank_account_fetches ADD COLUMN IF NOT EXISTS broad_success JSONB`;
 }
 
 const requestSchema = z.object({
@@ -191,6 +192,7 @@ const observationSchema = z.object({
   error_code: z.string().nullable(),
   request: requestSchema,
   last_success: successSchema.nullable(),
+  broad_success: successSchema.nullable().optional(),
 });
 export type FetchRequest = z.infer<typeof requestSchema>;
 export type FetchSuccess = z.infer<typeof successSchema>;
@@ -227,7 +229,8 @@ export async function beginAccountFetch(
     ON CONFLICT (subject, account_ref, resource) DO UPDATE SET
       connection_id = EXCLUDED.connection_id, attempt_id = EXCLUDED.attempt_id,
       last_attempt_at = EXCLUDED.last_attempt_at, last_result = 'running', error_code = NULL, request = EXCLUDED.request,
-      last_success = CASE WHEN bank_account_fetches.connection_id = EXCLUDED.connection_id THEN bank_account_fetches.last_success ELSE NULL END
+      last_success = CASE WHEN bank_account_fetches.connection_id = EXCLUDED.connection_id THEN bank_account_fetches.last_success ELSE NULL END,
+      broad_success = CASE WHEN bank_account_fetches.connection_id = EXCLUDED.connection_id THEN bank_account_fetches.broad_success ELSE NULL END
     RETURNING account_ref
   `;
   return rows.length > 0;
@@ -239,10 +242,18 @@ export async function finishAccountFetch(
 ) {
   const sql = getSql();
   await ensureConnectionSchema();
+  const successJson = "success" in result ? JSON.stringify(result.success) : null;
   await sql`UPDATE bank_account_fetches SET
       last_result = ${"success" in result ? "success" : "failed"},
       error_code = ${"errorCode" in result ? result.errorCode : null},
-      last_success = CASE WHEN ${"success" in result} THEN ${"success" in result ? JSON.stringify(result.success) : null}::jsonb ELSE last_success END
+      last_success = CASE WHEN ${"success" in result} THEN ${successJson}::jsonb ELSE last_success END,
+      broad_success = CASE WHEN ${"success" in result} AND (
+        broad_success IS NULL OR resource = 'balances' OR (
+          (${successJson}::jsonb->>'date_from') <= (broad_success->>'date_from')
+          AND (${successJson}::jsonb->>'date_to') >= (broad_success->>'date_to')
+          AND ((${successJson}::jsonb->>'status') = 'all' OR (${successJson}::jsonb->>'status') = (broad_success->>'status'))
+        )
+      ) THEN ${successJson}::jsonb ELSE broad_success END
     WHERE subject = ${attempt.connection.subject} AND connection_id = ${attempt.connection.connectionId}
       AND account_ref = ${attempt.accountRef} AND resource = ${attempt.resource} AND attempt_id = ${attempt.attemptId}
       AND EXISTS (SELECT 1 FROM bank_connections c WHERE c.subject = bank_account_fetches.subject AND c.connection_id = bank_account_fetches.connection_id)
@@ -255,7 +266,7 @@ export async function getAccountFetchObservations(
   const sql = getSql();
   await ensureConnectionSchema();
   const rows =
-    await sql`SELECT account_ref, resource, last_attempt_at, last_result, error_code, request, last_success
+    await sql`SELECT account_ref, resource, last_attempt_at, last_result, error_code, request, last_success, broad_success
     FROM bank_account_fetches WHERE subject = ${connection.subject} AND connection_id = ${connection.connectionId}
       AND EXISTS (SELECT 1 FROM bank_connections c WHERE c.subject = bank_account_fetches.subject AND c.connection_id = bank_account_fetches.connection_id)
     ORDER BY account_ref, resource`;

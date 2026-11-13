@@ -4,6 +4,7 @@ import {
   ECONOMIC_FLOWS,
   PURPOSES,
   financialRuleSchema,
+  transactionOverrideSchema,
 } from "@/lib/analysis/classification";
 import { CATEGORY_LABELS } from "@/lib/analysis/rules";
 import { BANK_TRANSACTION_STATUSES } from "@/lib/transactions";
@@ -58,7 +59,8 @@ const dataStatus = array(object({
   last_result: { type: "string", enum: ["running", "success", "failed"] },
   error_code: nullable(string),
   last_success: nullable(fetchSuccess),
-}));
+  broad_success: nullable(fetchSuccess),
+}, ["broad_success"]));
 const consent = object({
   state: { type: "string", enum: ["unknown", "active", "expiring", "expired"] },
   expires_at: nullable(string),
@@ -90,6 +92,8 @@ const totalsProperties = {
 };
 const transaction = object({
   transaction_ref: string,
+  override_supported: boolean,
+  override_reason: nullable(string),
   account_ref: string,
   date,
   amount_decimal: decimal,
@@ -105,7 +109,7 @@ const transaction = object({
   category_label: string,
   confidence,
   matched_rule_id: nullable(string),
-  classification_source: { type: "string", enum: ["user_rule", "family", "heuristic", "rule"] },
+  classification_source: { type: "string", enum: ["transaction_override", "user_rule", "family", "heuristic", "rule"] },
   classification_reason: string,
   event_kind: { type: "string", enum: ["unknown", "refund", "reversal"] },
   zero_amount: boolean,
@@ -158,13 +162,18 @@ function output(success: Schema): NonNullable<Tool["outputSchema"]> {
 }
 
 export const OUTPUT_SCHEMAS = {
-  get_connection_status: output({ anyOf: [
-    object({ connected: { const: false }, connect_url: string, message: string }),
-    object({
-      connected: { const: true }, connected_at: string, consent_expires_at: nullable(string),
-      country: string, provider: string, reconnect_url: string, ...observations,
-    }),
-  ] }),
+  upsert_classification_rule: output(object({ rule: z.toJSONSchema(financialRuleSchema, { target: "draft-7" }) })),
+  delete_classification_rule: output(object({ id: string, deleted: boolean })),
+  set_transaction_override: output(object({ override: z.toJSONSchema(transactionOverrideSchema, { target: "draft-7" }) })),
+  get_connection_status: output({
+    anyOf: [
+      object({ connected: { const: false }, connect_url: string, message: string }),
+      object({
+        connected: { const: true }, connected_at: string, consent_expires_at: nullable(string),
+        country: string, provider: string, reconnect_url: string, ...observations,
+      }),
+    ]
+  }),
   get_account_summary: output(object({
     accounts: array(object({
       account_ref: string, account_type: nullable(string), currency: nullable(currency),
@@ -179,18 +188,20 @@ export const OUTPUT_SCHEMAS = {
   })),
   summarize_spending: output(object({ ...totalsProperties, ...analysisProperties, ...observations }, ["totals_by_status", "estimate"])),
   find_transactions: output(object({
-    ...totalsProperties, transactions: array(transaction), page_limited_by_size: boolean,
+    ...totalsProperties, pending: object(totalsProperties, ["totals_by_status"]), transactions: array(transaction), page_limited_by_size: boolean,
     next_cursor: nullable(string), truncated: boolean, ...observations,
-  }, ["totals_by_status"])),
-  get_transaction_totals: output(object({ ...totalsProperties, ...observations }, ["totals_by_status"])),
+  }, ["totals_by_status", "pending"])),
+  get_transaction_totals: output(object({ ...totalsProperties, pending: object(totalsProperties, ["totals_by_status"]), ...observations }, ["totals_by_status", "pending"])),
   compare_spending_periods: output(object({
     current: period, previous: period, discretionary_monthly_change: number, ...observations,
   })),
   list_classification_rules: output(object({
     rules: array(z.toJSONSchema(financialRuleSchema, { target: "draft-7", io: "input" })),
+    overrides: array(z.toJSONSchema(transactionOverrideSchema, { target: "draft-7" })),
   })),
   get_recurring_transactions: output(object({
     date_from: date, date_to: date,
+    merchant_amount_changes: array(object({ merchant: string, currency, purpose, project: nullable(string), evidence: string, amount_changes: array(object({ date, previous_date: date, previous_account_ref: string, account_ref: string, previous_amount_decimal: decimal, amount_decimal: decimal, difference_decimal: decimal })) })),
     recurring: array(object({
       account_ref: string, merchant: string, currency, purpose, project: nullable(string),
       observation_count: count,

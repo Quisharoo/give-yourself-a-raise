@@ -7,7 +7,14 @@ import {
   compareDecimal,
   parseDecimal,
 } from "@/lib/transactions";
-import type { EnableBankingTransaction } from "@/lib/enable-banking/types";
+import {
+  stableRef,
+  type TransactionIdentity,
+} from "@/lib/transactions-identity";
+import type {
+  EnableBankingAccountSnapshot,
+  EnableBankingTransaction,
+} from "@/lib/enable-banking/types";
 import {
   AMBIGUOUS_FAMILIES,
   detectMerchantFamily,
@@ -29,21 +36,57 @@ export const ECONOMIC_FLOWS = [
   "unknown",
 ] as const;
 export const PURPOSES = ["business", "personal", "unassigned"] as const;
-export const financialRuleSchema = z.object({
-  id: z.string(),
-  priority: z.number().int(),
-  merchant_key: z.string(),
-  direction: z.enum(["debit", "credit", "either"]),
-  except_amount: z
-    .object({
-      currency: z.string().regex(/^[A-Z]{3}$/),
-      amount: z.string().regex(/^\d+(?:\.\d+)?$/),
-    })
-    .nullable(),
-  purpose: z.enum(PURPOSES),
-  project: z.string().nullable(),
-  flow_kind: z.enum(ECONOMIC_FLOWS).nullable(),
-});
+const exactMoneySchema = z
+  .object({
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    amount: z
+      .string()
+      .regex(/^\d+(?:\.\d+)?$/)
+      .max(256),
+  })
+  .strict();
+export const classificationLabelsSchema = z
+  .object({
+    purpose: z.enum(PURPOSES),
+    project: z.string().trim().min(1).max(100).nullable(),
+    flow_kind: z.enum(ECONOMIC_FLOWS).nullable(),
+  })
+  .strict();
+export const transactionOverrideSchema = classificationLabelsSchema
+  .extend({ transaction_ref: z.string().regex(/^txn_[A-Za-z0-9_-]{43}$/) })
+  .strict();
+export type TransactionOverride = z.infer<typeof transactionOverrideSchema>;
+export interface ClassificationSnapshot {
+  subject: string;
+  rules: readonly FinancialRule[];
+  overrides: readonly TransactionOverride[];
+}
+export type ClassificationInput =
+  readonly FinancialRule[] | ClassificationSnapshot;
+export const financialRuleSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+    priority: z.number().int().min(-100000).max(100000),
+    merchant_key: z.string().trim().min(1).max(200).optional(),
+    merchant_text: z.string().trim().min(1).max(200).optional(),
+    exact_amount: exactMoneySchema.optional(),
+    account_ref: z
+      .string()
+      .regex(/^acc_[A-Za-z0-9_-]{43}$/)
+      .optional(),
+    zero_amount: z.boolean().optional(),
+    direction: z.enum(["debit", "credit", "either"]),
+    except_amount: exactMoneySchema.nullable(),
+    purpose: z.enum(PURPOSES),
+    project: z.string().trim().min(1).max(100).nullable(),
+    flow_kind: z.enum(ECONOMIC_FLOWS).nullable(),
+  })
+  .strict()
+  .refine(
+    (rule) =>
+      rule.merchant_key !== undefined || rule.merchant_text !== undefined,
+    "A merchant_key or merchant_text is required.",
+  );
 export type FinancialRule = z.infer<typeof financialRuleSchema>;
 export const financialFilterShape = {
   purpose: z.enum(PURPOSES).optional(),
@@ -57,6 +100,11 @@ export const financialFilterShape = {
 export type FinancialFilter = z.infer<typeof financialFiltersSchema>;
 export const financialFiltersSchema = z.object(financialFilterShape);
 export interface NormalizedTransaction {
+  transactionRef: string | null;
+  overrideSupported: boolean;
+  overrideReason: string | null;
+  identityEvidence: string | null;
+  matchedOverride: boolean;
   absAmount: number;
   accountId: string;
   classification: TransactionClassification;
@@ -112,6 +160,53 @@ const aliases = [
     pattern: /^(?:amazon prime|amzn ?prime)(?: |$)/,
     key: "amazon_prime",
     label: "Amazon Prime",
+  },
+  {
+    pattern: /^(?:openai chatgpt|openai chatgpt subscr)(?: |$)/,
+    key: "openai_chatgpt",
+    label: "ChatGPT",
+  },
+  { pattern: /^(?:openrouter)(?: |$)/, key: "openrouter", label: "OpenRouter" },
+  { pattern: /^(?:render com|render)(?: |$)/, key: "render", label: "Render" },
+  {
+    pattern: /^(?:register365)(?: |$)/,
+    key: "register365",
+    label: "Register365",
+  },
+  { pattern: /^(?:hetzner)(?: |$)/, key: "hetzner", label: "Hetzner" },
+  {
+    pattern: /^(?:vercel mkt upstash|upstash)(?: |$)/,
+    key: "upstash",
+    label: "Upstash",
+  },
+  { pattern: /^(?:vercel)(?: |$)/, key: "vercel", label: "Vercel" },
+  { pattern: /^(?:cursor)(?: |$)/, key: "cursor", label: "Cursor" },
+  { pattern: /^(?:lovable)(?: |$)/, key: "lovable", label: "Lovable" },
+  {
+    pattern: /^(?:intellectual property off(?:ice)?)(?: |$)/,
+    key: "intellectual_property_office",
+    label: "Intellectual Property Office",
+  },
+  {
+    pattern: /^(?:companies registration of(?:fice)?)(?: |$)/,
+    key: "companies_registration_office",
+    label: "Companies Registration Office",
+  },
+  {
+    pattern: /^(?:wl google google play a|google play)(?: |$)/,
+    key: "google_play",
+    label: "Google Play",
+  },
+  {
+    pattern: /^(?:exchanged to usd)$/,
+    key: "exchanged_to_usd",
+    label: "Exchanged to USD",
+  },
+  { pattern: /^(?:kevin byrne)$/, key: "kevin_byrne", label: "Kevin Byrne" },
+  {
+    pattern: /^(?:paul michael mccarthy)$/,
+    key: "paul_michael_mccarthy",
+    label: "Paul Michael McCarthy",
   },
   { pattern: /^(?:amazon|amzn)(?: |$)/, key: "amazon", label: "Amazon" },
 ];
@@ -188,8 +283,14 @@ function isInternalMovement(
 export function normalizeTransaction(
   accountId: string,
   transaction: EnableBankingTransaction,
-  rules: readonly FinancialRule[] = [],
+  input: ClassificationInput = [],
+  context?: TransactionIdentity & { accountRef: string | null },
 ): NormalizedTransaction {
+  const rules = "rules" in input ? input.rules : input;
+  const override =
+    context?.supported && "overrides" in input
+      ? input.overrides.find((item) => item.transaction_ref === context.ref)
+      : undefined;
   const signedAmount = Number(
     formatDecimal(transactionMoney(transaction).signed),
   );
@@ -247,10 +348,29 @@ export function normalizeTransaction(
     .sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id))
     .find(
       (candidate) =>
-        candidate.merchant_key === identity.key &&
+        (candidate.merchant_text
+          ? rawDescriptor
+              .toLowerCase()
+              .includes(candidate.merchant_text.toLowerCase())
+          : candidate.merchant_key === identity.key) &&
+        (!candidate.account_ref ||
+          candidate.account_ref === context?.accountRef) &&
+        (candidate.zero_amount === undefined ||
+          candidate.zero_amount ===
+            (transactionMoney(transaction).magnitude.coefficient ===
+              BigInt(0))) &&
+        (!candidate.exact_amount ||
+          (candidate.exact_amount.currency ===
+            transaction.transaction_amount.currency &&
+            compareDecimal(
+              parseDecimal(candidate.exact_amount.amount),
+              transactionMoney(transaction).magnitude,
+            ) === 0)) &&
         (candidate.direction === "either" ||
           candidate.direction ===
-            (transaction.credit_debit_indicator === "DBIT" ? "debit" : "credit")) &&
+            (transaction.credit_debit_indicator === "DBIT"
+              ? "debit"
+              : "credit")) &&
         !(
           candidate.except_amount &&
           candidate.except_amount.currency ===
@@ -268,6 +388,13 @@ export function normalizeTransaction(
     event !== "reversal"
   )
     economicFlow = rule.flow_kind;
+  if (
+    override?.flow_kind &&
+    economicFlow !== "transfer" &&
+    event !== "refund" &&
+    event !== "reversal"
+  )
+    economicFlow = override.flow_kind;
   if (funding && !internal && !rule?.flow_kind && economicFlow === "transfer")
     classification = {
       ...classification,
@@ -288,6 +415,11 @@ export function normalizeTransaction(
   else if (classification.flowKind === "unknown")
     classification = { ...classification, flowKind: "behavioural_spend" };
   return {
+    transactionRef: context?.ref ?? null,
+    overrideSupported: context?.supported ?? false,
+    overrideReason: context?.reason ?? "stable_account_identity_unavailable",
+    identityEvidence: context?.evidence ?? null,
+    matchedOverride: override !== undefined,
     amountDecimal: formatDecimal(transactionMoney(transaction).signed),
     merchantKey: identity.key,
     rawDescriptor,
@@ -302,8 +434,8 @@ export function normalizeTransaction(
       )
       .digest("hex"),
     economicFlow,
-    purpose: rule?.purpose ?? "unassigned",
-    project: rule?.project ?? null,
+    purpose: override?.purpose ?? rule?.purpose ?? "unassigned",
+    project: override ? override.project : (rule?.project ?? null),
     matchedRuleId: rule?.id ?? null,
     absAmount,
     accountId,
@@ -573,4 +705,76 @@ function normalizeText(value: string) {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+export function normalizeAccountTransactions(
+  account: EnableBankingAccountSnapshot,
+  input: ClassificationInput = [],
+) {
+  const subject = "subject" in input ? input.subject : null;
+  const keys = account.transactions.map((row) =>
+    row.entry_reference?.trim()
+      ? ["entry", row.entry_reference]
+      : row.transaction_id?.trim()
+        ? ["transaction", row.transaction_id]
+        : null,
+  );
+  const counts = new Map<string, number>();
+  for (const key of keys)
+    if (key) {
+      const value = JSON.stringify(key);
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+  const accountReference =
+    subject && account.stableIdentity
+      ? stableRef(subject, "acc", account.stableIdentity)
+      : (account.classificationAccountRef ?? null);
+  return account.transactions.map((transaction, index) => {
+    const key = keys[index];
+    let supported = Boolean(
+      subject &&
+      account.stableIdentity &&
+      key &&
+      counts.get(JSON.stringify(key)) === 1,
+    );
+    const ref =
+      subject && account.stableIdentity && key
+        ? stableRef(
+            subject,
+            "txn",
+            JSON.stringify([account.stableIdentity, key]),
+          )
+        : null;
+    if (ref && account.unsupportedTransactionRefs?.includes(ref))
+      supported = false;
+    const evidence = ref
+      ? createHash("sha256")
+          .update(
+            JSON.stringify([
+              transaction.transaction_amount,
+              transaction.credit_debit_indicator,
+              transaction.booking_date ??
+                transaction.value_date ??
+                transaction.transaction_date,
+              transaction.creditor?.name ?? transaction.debtor?.name ?? null,
+            ]),
+          )
+          .digest("hex")
+      : null;
+    return normalizeTransaction(account.accountId, transaction, input, {
+      accountRef: accountReference,
+      ref,
+      supported,
+      evidence,
+      reason: supported
+        ? null
+        : !account.stableIdentity
+          ? "stable_account_identity_unavailable"
+          : !key
+            ? "bank_transaction_identity_unavailable"
+            : account.unsupportedTransactionRefs?.includes(ref ?? "")
+              ? "conflicting_bank_identity"
+              : "duplicate_bank_identity",
+    });
+  });
 }

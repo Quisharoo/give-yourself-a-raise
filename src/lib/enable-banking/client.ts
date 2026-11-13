@@ -1,4 +1,5 @@
 import { randomUUID, sign } from "node:crypto";
+import { enableBankingAccountDetailsSchema } from "./types";
 import { readFileSync } from "node:fs";
 
 import type {
@@ -241,10 +242,10 @@ export async function getAccountBalances(accountId: string, psuHeaders?: PsuHead
 }
 
 export async function getAccountDetails(accountId: string, psuHeaders?: PsuHeaders) {
-  return enableBankingRequest<{ cash_account_type?: string; currency?: string }>(
+  return enableBankingAccountDetailsSchema.parse(await enableBankingRequest<unknown>(
     `/accounts/${accountId}/details`,
     { headers: psuHeaders },
-  );
+  ));
 }
 
 export async function getAccountTransactions(

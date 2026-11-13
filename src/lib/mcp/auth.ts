@@ -2,6 +2,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import { getPrivateOwnerSubject } from "@/lib/auth/owner";
 
+export const MCP_CLASSIFICATION_SCOPE = "write:classifications";
 export const MCP_ACCESS_SCOPE = "read:bank_data";
 
 export interface AuthenticatedMcpUser {

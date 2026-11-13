@@ -1,4 +1,4 @@
-import { getAuth0Issuer, getMcpResourceUrl, MCP_ACCESS_SCOPE } from "@/lib/mcp/auth";
+import { getAuth0Issuer, getMcpResourceUrl, MCP_ACCESS_SCOPE, MCP_CLASSIFICATION_SCOPE } from "@/lib/mcp/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
       bearer_methods_supported: ["header"],
       resource: resourceUrl,
       resource_documentation: new URL("/privacy", baseUrl).toString(),
-      scopes_supported: [MCP_ACCESS_SCOPE],
+      scopes_supported: [MCP_ACCESS_SCOPE, MCP_CLASSIFICATION_SCOPE],
     };
 
     return Response.json(metadata, { headers: corsHeaders });

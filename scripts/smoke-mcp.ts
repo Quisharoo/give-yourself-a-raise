@@ -118,15 +118,17 @@ async function main() {
       "compare_spending_periods", "find_transactions", "get_account_summary",
       "get_connection_status", "get_recurring_transactions", "get_transaction_totals",
       "list_classification_rules", "summarize_spending",
-    ]);
+      "upsert_classification_rule", "delete_classification_rule", "set_transaction_override",
+    ].sort());
     for (const tool of tools) {
-      assert.equal(tool.annotations?.readOnlyHint, true);
-      assert.equal(tool.annotations?.destructiveHint, false);
+      const writing = ["upsert_classification_rule", "delete_classification_rule", "set_transaction_override"].includes(tool.name);
+      assert.equal(tool.annotations?.readOnlyHint, !writing);
+      assert.equal(tool.annotations?.destructiveHint, tool.name === "delete_classification_rule");
       assert.equal(tool.annotations?.idempotentHint, true);
       assert.equal(tool.outputSchema?.type, "object");
       assert.equal(z.array(z.unknown()).parse(tool.outputSchema?.anyOf).length, 2);
       const security = z.array(z.object({ scopes: z.array(z.string()) })).parse(tool._meta?.securitySchemes);
-      assert.deepEqual(security[0].scopes, ["read:bank_data"]);
+      assert.deepEqual(security[0].scopes, writing ? ["read:bank_data", "write:classifications"] : ["read:bank_data"]);
     }
     assert.equal(bankReads + connectionReads + ruleReads, 0, "discovery must not read banking state");
 
@@ -233,8 +235,8 @@ async function main() {
       connected: false, connect_url: "http://localhost:3000/",
       message: "Open the connection URL to link your bank.",
     });
-    for (const tool of tools.filter((tool) => tool.name !== "get_connection_status")) {
-      await expectError(tool.name, {}, "not_connected");
+    for (const tool of tools.filter((tool) => !["get_connection_status", "list_classification_rules"].includes(tool.name))) {
+      await expectError(tool.name, {}, tool.annotations?.readOnlyHint ? "not_connected" : "insufficient_scope");
     }
     console.log(`MCP smoke passed: ${tools.length} SDK-validated output contracts, zero-read discovery, Monday totals/estimates, recurring evidence, paging and structured failures using synthetic bank data`);
   } finally {

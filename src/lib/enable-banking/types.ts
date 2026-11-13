@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type EnableBankingPsuType = "business" | "personal";
 
 export interface MoneyAmount {
@@ -44,6 +46,8 @@ export interface EnableBankingSessionAccountReference {
   iban?: string;
   name?: string;
   uid: string;
+  stableIdentity?: string;
+  details?: EnableBankingAccountDetails;
 }
 
 export interface EnableBankingSession {
@@ -52,6 +56,13 @@ export interface EnableBankingSession {
   session_id?: string;
   [key: string]: unknown;
 }
+
+export const enableBankingAccountDetailsSchema = z.object({
+  identification_hash: z.string().trim().min(1).max(512).optional(),
+  cash_account_type: z.string().max(20).optional(),
+  currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+});
+export type EnableBankingAccountDetails = z.infer<typeof enableBankingAccountDetailsSchema>;
 
 export interface EnableBankingBalance {
   balance_amount: MoneyAmount;
@@ -93,6 +104,9 @@ export interface EnableBankingTransactionsResponse {
 
 export interface EnableBankingAccountSnapshot {
   accountId: string;
+  stableIdentity?: string;
+  unsupportedTransactionRefs?: string[];
+  classificationAccountRef?: string;
   balances: EnableBankingBalance[];
   iban?: string;
   name?: string;

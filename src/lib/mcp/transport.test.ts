@@ -60,8 +60,14 @@ async function invoke(
   method: string,
   params: Record<string, unknown>,
   subject = "owner",
+  scopes?: readonly string[],
 ) {
-  const server = createMcpServer(subject, "http://localhost", dependencies);
+  const server = createMcpServer(
+    subject,
+    "http://localhost",
+    dependencies,
+    scopes,
+  );
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
     sessionIdGenerator: undefined,
@@ -115,7 +121,7 @@ test("real MCP initialize/list/call carries account selection, exact whole-resul
     version: "0.1.0",
   });
   const listed = await invoke(dependencies, "tools/list", {});
-  assert.equal(z.array(z.unknown()).parse(listed.tools).length, 8);
+  assert.equal(z.array(z.unknown()).parse(listed.tools).length, 11);
   const summary = content(
     await call(dependencies, "get_account_summary", range),
   );
@@ -436,7 +442,12 @@ test("MCP rejects invalid bank dates and amounts before recording success", asyn
   for (const bad of [
     { booking_date: "2026-02-30", amount: "1" },
     { booking_date: "2026-01-01", amount: "1e9" },
-    { booking_date: null, value_date: null, transaction_date: null, amount: "1" },
+    {
+      booking_date: null,
+      value_date: null,
+      transaction_date: null,
+      amount: "1",
+    },
     { booking_date: "2026-01-01", value_date: "not-a-date", amount: "1" },
     { booking_date: "2026-01-01", transaction_date: "2026-02-30", amount: "1" },
   ]) {
@@ -711,20 +722,20 @@ test("one fixture produces the same owner/project totals across search, totals, 
   const found = content(
     await call(dependencies, "find_transactions", { ...range, ...filters }),
   );
-  assert.equal(found.matched_count, 5);
+  assert.equal(found.matched_count, 6);
   assert.deepEqual(found.totals, [
     {
       currency: "EUR",
-      count: 5,
-      debit: "30.30",
+      count: 6,
+      debit: "50.29",
       credit: "125.25",
-      net: "94.95",
+      net: "74.96",
     },
   ]);
   assert.deepEqual(found.classified_totals, [
     {
       currency: "EUR",
-      expense: "30.30",
+      expense: "50.29",
       income: "0",
       revenue: "125.25",
       refund: "0",
@@ -761,16 +772,22 @@ test("one fixture produces the same owner/project totals across search, totals, 
     .parse(found.transactions);
   const full = content(
     await call(dependencies, "find_transactions", {
-      ...range, ...filters, detail: "full",
+      ...range,
+      ...filters,
+      detail: "full",
     }),
   );
-  const fullRows = z.array(z.object({
-    transaction_ref: z.string(),
-    zero_amount: z.boolean(),
-    purpose: z.string(),
-    project: z.string(),
-    flow_kind: z.string(),
-  })).parse(full.transactions);
+  const fullRows = z
+    .array(
+      z.object({
+        transaction_ref: z.string(),
+        zero_amount: z.boolean(),
+        purpose: z.string(),
+        project: z.string(),
+        flow_kind: z.string(),
+      }),
+    )
+    .parse(full.transactions);
   assert.deepEqual(
     fullRows.map((row) => row.transaction_ref),
     compactRows.map((row) => row.transaction_ref),
@@ -1065,3 +1082,280 @@ for (const name of ["get_connection_status", "find_transactions"])
     );
     assert.equal(content(result).consent, undefined);
   });
+
+test("classification writes enforce their scope before storage and work without bank consent", async () => {
+  const { dependencies } = syntheticBank();
+  const { INITIAL_OWNER_RULES } = await import("../analysis/rule-store");
+  const writes: string[] = [];
+  dependencies.getBankConnection = async () => {
+    throw new Error("Classification tools must not read a bank connection");
+  };
+  dependencies.upsertFinancialRule = async (_subject, rule) => {
+    writes.push("upsert");
+    return (
+      await import("../analysis/classification")
+    ).financialRuleSchema.parse(rule);
+  };
+  dependencies.deleteFinancialRule = async () => {
+    writes.push("delete");
+    return true;
+  };
+  dependencies.setTransactionOverride = async (_subject, raw) => {
+    writes.push("override");
+    return (
+      await import("../analysis/classification")
+    ).transactionOverrideSchema.parse(raw);
+  };
+  const inputs = [
+    ["upsert_classification_rule", INITIAL_OWNER_RULES[0]],
+    ["delete_classification_rule", { id: "owner-render" }],
+    [
+      "set_transaction_override",
+      {
+        transaction_ref: `txn_${"a".repeat(43)}`,
+        purpose: "business",
+        project: "INCREMNT",
+        flow_kind: "expense",
+      },
+    ],
+  ] as const;
+  for (const [name, args] of inputs) {
+    const denied = await invoke(dependencies, "tools/call", {
+      name,
+      arguments: args,
+    });
+    assert.equal(denied.isError, true);
+    assert.equal(
+      z
+        .object({ error: z.object({ code: z.literal("insufficient_scope") }) })
+        .parse(content(denied)).error.code,
+      "insufficient_scope",
+    );
+  }
+  assert.deepEqual(writes, []);
+  for (const [name, args] of inputs) {
+    const allowed = await invoke(
+      dependencies,
+      "tools/call",
+      { name, arguments: args },
+      "owner",
+      ["read:bank_data", "write:classifications"],
+    );
+    assert.notEqual(allowed.isError, true);
+  }
+  assert.deepEqual(writes, ["upsert", "delete", "override"]);
+  const invalid = await invoke(
+    dependencies,
+    "tools/call",
+    {
+      name: "upsert_classification_rule",
+      arguments: { ...INITIAL_OWNER_RULES[0], priority: Infinity },
+    },
+    "owner",
+    ["read:bank_data", "write:classifications"],
+  );
+  assert.equal(invalid.isError, true);
+  assert.deepEqual(writes, ["upsert", "delete", "override"]);
+  assert.deepEqual(
+    content(await call(dependencies, "list_classification_rules", {})),
+    { rules: [], overrides: [] },
+  );
+});
+
+test("strong references and overrides survive reconnects, with complete compact MCP results bounded", async () => {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 31).toString(
+    "base64",
+  );
+  try {
+    const { dependencies } = syntheticBank();
+    let generation = 1;
+    dependencies.getBankConnection = async (subject) => ({
+      subject,
+      sessionId: `session-${generation}`,
+      connectionId: `generation-${generation}`,
+      connectedAt: "2026-01-01",
+      consentExpiresAt: null,
+      country: "IE",
+      provider: "Fixture",
+    });
+    dependencies.getSession = async () => ({
+      accounts: [`rotating-account-${generation}`],
+    });
+    dependencies.getAccountDetails = async () => ({
+      identification_hash: "persistent-bank-account",
+      currency: "EUR",
+      cash_account_type: "CARD",
+    });
+    let overrideRef: string | null = null;
+    dependencies.listTransactionOverrides = async () =>
+      overrideRef
+        ? [
+            {
+              transaction_ref: overrideRef,
+              purpose: "business",
+              project: "One off",
+              flow_kind: "expense",
+            },
+          ]
+        : [];
+    const first = await call(dependencies, "find_transactions", {
+      ...range,
+      limit: 1,
+    });
+    const firstRows = z
+      .array(
+        z.object({
+          transaction_ref: z.string(),
+          account_ref: z.string(),
+          override_supported: z.boolean(),
+        }),
+      )
+      .parse(content(first).transactions);
+    assert.equal(firstRows[0].override_supported, true);
+    overrideRef = firstRows[0].transaction_ref;
+    const oldCursor = content(first).next_cursor;
+    generation++;
+    const after = await call(dependencies, "find_transactions", {
+      ...range,
+      detail: "full",
+      limit: 50,
+    });
+    assert(Buffer.byteLength(JSON.stringify(after)) <= 16_000);
+    const assigned = await call(dependencies, "find_transactions", {
+      ...range,
+      detail: "full",
+      purpose: "business",
+      project: "One off",
+    });
+    const rows = z
+      .array(
+        z.object({
+          transaction_ref: z.string(),
+          account_ref: z.string(),
+          purpose: z.string(),
+          project: z.string().nullable(),
+          classification_source: z.string(),
+        }),
+      )
+      .parse(content(assigned).transactions);
+    assert.equal(rows[0].transaction_ref, firstRows[0].transaction_ref);
+    assert.equal(rows[0].account_ref, firstRows[0].account_ref);
+    assert.equal(rows[0].purpose, "business");
+    assert.equal(rows[0].project, "One off");
+    assert.equal(rows[0].classification_source, "transaction_override");
+    const expired = await call(dependencies, "find_transactions", {
+      cursor: oldCursor,
+    });
+    assert.equal(expired.isError, true);
+    const totals = content(
+      await call(dependencies, "get_transaction_totals", {
+        ...range,
+        purpose: "business",
+        project: "One off",
+      }),
+    );
+    assert.equal(totals.matched_count, 1);
+    assert.deepEqual(totals.totals, [
+      { currency: "EUR", count: 1, debit: "0.10", credit: "0", net: "-0.10" },
+    ]);
+    const pending = z
+      .object({ matched_count: z.number() })
+      .parse(content(after).pending);
+    assert.equal(pending.matched_count, 1);
+  } finally {
+    if (previousKey === undefined)
+      delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
+  }
+});
+
+test("MCP refuses duplicate and contradictory strong transaction identities without applying old overrides", async () => {
+  const previousKey = process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+  process.env.BANK_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 23).toString(
+    "base64",
+  );
+  try {
+    const { dependencies } = syntheticBank();
+    dependencies.getSession = async () => ({ accounts: ["account"] });
+    dependencies.getAccountDetails = async () => ({
+      identification_hash: "unique-hash",
+      currency: "EUR",
+      cash_account_type: "CARD",
+    });
+    const transaction = {
+      booking_date: "2026-01-15",
+      status: "BOOK",
+      entry_reference: "entry",
+      creditor: { name: "Amazon" },
+      credit_debit_indicator: "DBIT",
+      transaction_amount: { amount: "10", currency: "EUR" },
+    } satisfies EnableBankingTransaction;
+    let rows = [transaction];
+    dependencies.getAllAccountTransactions = async () => rows;
+    const first = z
+      .array(
+        z.object({
+          transaction_ref: z.string(),
+          override_supported: z.boolean(),
+        }),
+      )
+      .parse(
+        content(await call(dependencies, "find_transactions", range))
+          .transactions,
+      )[0];
+    const labels = {
+      transaction_ref: first.transaction_ref,
+      purpose: "business",
+      project: "INCREMNT",
+      flow_kind: "expense",
+    };
+    const write = () =>
+      invoke(
+        dependencies,
+        "tools/call",
+        { name: "set_transaction_override", arguments: labels },
+        "owner",
+        ["read:bank_data", "write:classifications"],
+      );
+    assert.notEqual((await write()).isError, true);
+    assert.equal(
+      content(
+        await call(dependencies, "get_transaction_totals", {
+          ...range,
+          purpose: "business",
+        }),
+      ).matched_count,
+      1,
+    );
+    rows = [transaction, transaction];
+    const duplicates = z
+      .array(z.object({ override_supported: z.boolean(), purpose: z.string() }))
+      .parse(
+        content(await call(dependencies, "find_transactions", range))
+          .transactions,
+      );
+    assert(
+      duplicates.every(
+        (row) => !row.override_supported && row.purpose === "unassigned",
+      ),
+    );
+    assert.equal((await write()).isError, true);
+    rows = [
+      { ...transaction, transaction_amount: { amount: "99", currency: "EUR" } },
+    ];
+    const conflict = z
+      .array(z.object({ override_supported: z.boolean(), purpose: z.string() }))
+      .parse(
+        content(await call(dependencies, "find_transactions", range))
+          .transactions,
+      )[0];
+    assert.equal(conflict.override_supported, false);
+    assert.equal(conflict.purpose, "unassigned");
+    assert.equal((await write()).isError, true);
+  } finally {
+    if (previousKey === undefined)
+      delete process.env.BANK_CONNECTION_ENCRYPTION_KEY;
+    else process.env.BANK_CONNECTION_ENCRYPTION_KEY = previousKey;
+  }
+});
