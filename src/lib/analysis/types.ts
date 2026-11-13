@@ -95,6 +95,8 @@ export interface UncertainSpendItem {
 }
 
 export interface AnalysisDebugCounts {
+  excludedNonBookedTransactions?: number;
+  statusCounts?: Record<string, number>;
   behaviouralTransactions: number;
   excludedOneOffTransactions: number;
   fixedCostTransactions: number;
@@ -104,6 +106,7 @@ export interface AnalysisDebugCounts {
 }
 
 export interface SpendingAnalysis {
+  estimate?: string;
   accountCount: number;
   baseline: AnalysisBaseline | null;
   currencySummary: {

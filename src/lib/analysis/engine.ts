@@ -1,3 +1,9 @@
+import {
+  formatDecimal,
+  transactionMoney,
+  transactionStatus,
+  transactionStatusCounts,
+} from "@/lib/transactions";
 import type { EnableBankingAccountSnapshot, EnableBankingTransaction } from "@/lib/enable-banking/types";
 import {
   AMBIGUOUS_FAMILIES,
@@ -55,9 +61,14 @@ export function analyzeSpending(
 ): SpendingAnalysis {
   const windowDays = normalizeWindowDays(options.windowDays);
   const normalized = accounts.flatMap((account) =>
-    account.transactions.map((transaction) => normalizeTransaction(account.accountId, transaction)),
+    account.transactions
+      .filter((transaction) => transactionStatus(transaction.status) === "BOOK")
+      .map((transaction) => normalizeTransaction(account.accountId, transaction)),
   );
 
+  const statusCounts = transactionStatusCounts(
+    accounts.flatMap((account) => account.transactions),
+  );
   const totalTransactions = normalized.length;
   const behavioural = normalized.filter((transaction) => transaction.classification.flowKind === "behavioural_spend");
   const fixedCost = normalized.filter((transaction) => transaction.classification.flowKind === "fixed_cost");
@@ -96,6 +107,7 @@ export function analyzeSpending(
 
   return {
     accountCount: accounts.length,
+    estimate: "Monthly projections from BOOK bank-returned rows, not exact period totals or a completeness guarantee.",
     baseline,
     currencySummary: {
       otherCurrencies,
@@ -103,6 +115,10 @@ export function analyzeSpending(
     },
     debugCounts: {
       behaviouralTransactions: behavioural.length,
+      excludedNonBookedTransactions: Object.entries(statusCounts)
+        .filter(([status]) => status !== "BOOK")
+        .reduce((total, [, count]) => total + count, 0),
+      statusCounts,
       excludedOneOffTransactions,
       fixedCostTransactions: fixedCost.length,
       totalTransactions,
@@ -333,10 +349,7 @@ function detectPattern(transactions: NormalizedTransaction[], averageSpend: numb
 }
 
 function normalizeTransaction(accountId: string, transaction: EnableBankingTransaction): NormalizedTransaction {
-  const amount = Number(transaction.transaction_amount.amount);
-  const safeAmount = Number.isFinite(amount) ? amount : 0;
-  const signedAmount =
-    transaction.credit_debit_indicator === "CRDT" ? safeAmount : Math.abs(safeAmount) * -1;
+  const signedAmount = Number(formatDecimal(transactionMoney(transaction).signed));
   const absAmount = Math.abs(signedAmount);
   const merchant = deriveMerchantLabel(transaction);
   const description = normalizeText(
