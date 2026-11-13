@@ -273,6 +273,7 @@ export async function getAllAccountTransactions(
 ) {
   const transactions: EnableBankingTransactionsResponse["transactions"] = [];
   let continuationKey: string | undefined;
+  const seenKeys = new Set<string>();
 
   do {
     const page = await getAccountTransactions(
@@ -286,6 +287,12 @@ export async function getAllAccountTransactions(
 
     transactions.push(...page.transactions);
     continuationKey = page.continuation_key ?? undefined;
+    if (continuationKey) {
+      if (seenKeys.has(continuationKey)) {
+        throw new EnableBankingError("Bank transaction paging did not advance.");
+      }
+      seenKeys.add(continuationKey);
+    }
   } while (continuationKey);
 
   return transactions;

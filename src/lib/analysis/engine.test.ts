@@ -10,6 +10,7 @@ const accounts: EnableBankingAccountSnapshot[] = [
     balances: [],
     transactions: [
       {
+        status: "BOOK",
         bank_transaction_code: { code: "CARD_PAYMENT" },
         booking_date: "2026-08-01",
         credit_debit_indicator: "DBIT",
@@ -26,4 +27,34 @@ test("normalizes monthly spending using the requested analysis window", () => {
 
   assert.equal(thirtyDays.baseline?.discretionaryMonthlySpend, 30);
   assert.equal(ninetyDays.baseline?.discretionaryMonthlySpend, 10);
+});
+
+test("monthly estimates exclude all non-booked statuses and normalize CRDT negative provider amounts as credit", () => {
+  const booked = accounts[0].transactions[0];
+  const rows = [
+    booked,
+    ...[
+      "PDNG",
+      "HOLD",
+      "CNCL",
+      "OTHR",
+      "RJCT",
+      "SCHD",
+      undefined,
+      "bank-specific",
+    ].map((status) => ({ ...booked, status })),
+    {
+      ...booked,
+      credit_debit_indicator: "CRDT" as const,
+      transaction_amount: { amount: "-1.20", currency: "EUR" },
+    },
+  ];
+  const result = analyzeSpending([{ ...accounts[0], transactions: rows }], {
+    windowDays: 30,
+  });
+  assert.equal(result.baseline?.discretionaryMonthlySpend, 30);
+  assert.equal(result.debugCounts.excludedNonBookedTransactions, 8);
+  assert.equal(result.debugCounts.statusCounts?.UNKNOWN, 2);
+  assert.equal(result.debugCounts.totalTransactions, 2);
+  assert.match(result.estimate!, /Monthly projections/);
 });
