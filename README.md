@@ -1,6 +1,6 @@
 # Give Yourself a Raise
 
-Diagnosis-first spending analysis on top of Enable Banking, available as a private web app and a read-only ChatGPT app.
+Diagnosis-first spending analysis on top of Enable Banking, available as a private web app and a ChatGPT app with read-only bank access and separately authorized classification labels.
 
 ## What It Does
 
@@ -42,7 +42,7 @@ This repo is not a budgeting dashboard. The core promise is:
 - `/.well-known/oauth-protected-resource`
   - OAuth 2.1 protected-resource discovery for ChatGPT
 - `/mcp`
-  - authenticated MCP endpoint; all tools are read-only
+  - authenticated MCP endpoint; bank access is read-only and label writes require a separate scope
 - `/privacy` and `/terms`
   - public policies for private testing and eventual directory submission
 
@@ -79,13 +79,13 @@ For example, `find_transactions` accepts the following arguments. Replace the re
 
 Search and totals share date, merchant, category, absolute `min_amount`, absolute `max_amount`, account, and status filters. Amount bounds accept numbers or exact decimal strings. Dates must be real calendar dates, ordered, and at most 366 days apart. Dates default to the last 30 days.
 
-`find_transactions` requests up to 50 rows by default. A 12,000-byte row budget can return fewer complete rows, indicated by `page_limited_by_size`. Pass `next_cursor` as `cursor` for the next page. Other filters may be omitted or repeated unchanged. Cursors freeze default dates, expire 15 minutes after the first page, and bind the query to the user and bank session. Every continuation refetches the bank data. Changed rows or rules require restarting the search. Duplicate-looking rows remain separate and receive opaque `transaction_ref` values. Classification changes do not change those references.
+`find_transactions` requests up to 50 rows by default. A 12,000-byte row budget and a 16,000-byte complete MCP tool-result budget can return fewer complete rows, indicated by `page_limited_by_size`. Pass `next_cursor` as `cursor` for the next page. Other filters may be omitted or repeated unchanged. Cursors freeze default dates, expire 15 minutes after the first page, and bind the query to the user and bank session. Every continuation refetches the bank data. Changed rows or rules require restarting the search. Duplicate-looking rows remain separate. Bank-backed identities receive stable opaque references across reconnects. Unsupported or conflicting identities remain readable with `override_supported: false`. Classification changes do not change references.
 
 `get_transaction_totals` accepts the same filters without `limit`, `detail`, or `cursor` and returns no transaction rows. Both tools calculate totals across every matching bank-returned row before pagination. Each currency has decimal-string `debit`, `credit`, and signed `net` totals. Debit and credit are magnitudes. No currencies are combined. Balance and transaction `amount_decimal` strings are authoritative; lossy numeric amount fields are omitted. Full transaction detail includes `provider_amount_decimal` and a bounded raw descriptor alongside the canonical merchant. Direction comes from `CRDT` or `DBIT`, independently of the provider amount's sign. Malformed amounts or directions fail with a safe error.
 
 Purpose, project, economic flow, and currency filters apply consistently across financial tools. Exact `classified_totals` separate expenses, income, revenue, refunds, transfers, and unknown movements. Raw debit/credit/net totals retain transfers for reconciliation. Summaries and each comparison period include the same exact period totals alongside their monthly estimates.
 
-`list_classification_rules` exposes persisted rules for the authenticated owner. The initial Apple, Join Brands, Amazon, and Apple Distribution preferences are data records, separate from merchant aliases and general flow classification. Idempotent seeding preserves stored edits. Rules survive reconnects; fetch metadata belongs to its connection generation. Rule mutation is not exposed under the read-only OAuth scope. See [the financial contract](docs/mcp-financial-contract.md) for the exact defaults.
+`list_classification_rules` exposes persisted owner rules and one-off overrides. The defaults cover the INCREMNT merchants and personal exceptions in [the financial contract](docs/mcp-financial-contract.md). Atomic versioned seeding preserves stored edits and later deletions. `upsert_classification_rule`, `delete_classification_rule`, and `set_transaction_override` require both `read:bank_data` and `write:classifications`. Existing read tokens remain read-only. Classifications can be managed while bank consent is expired. A default BOOK query includes separate pending totals without adding pending charges to booked spend.
 
 `get_recurring_transactions` estimates cadence, the next charge date, and observed amount changes from booked expenses. It bounds output with `limit` and `offset`. An overdue-not-observed candidate requires successful request-local coverage through the evaluation date. Historical reads cannot borrow another request's freshness. Missing or ambiguous evidence stays explicit. Bank-history completeness remains unknown.
 
@@ -172,7 +172,7 @@ Keep production database, banking, and encryption credentials out of preview dep
 The full setup and promotion checklist is in [`docs/chatgpt-app.md`](docs/chatgpt-app.md). In short:
 
 1. Deploy this repo and set `APP_BASE_URL` to its stable HTTPS origin.
-2. Configure Auth0 dynamic client registration and the `read:bank_data` scope as described in the setup guide.
+2. Configure Auth0 dynamic client registration and the `read:bank_data` scope and optional separate `write:classifications` permission as described in the setup guide.
 3. Register `/api/enable-banking/callback` in Enable Banking.
 4. Sign in to the web app and connect Revolut once.
 5. In ChatGPT developer mode, create or refresh the private app using `https://give-yourself-a-raise.vercel.app/mcp`.

@@ -58,7 +58,7 @@ Complete Auth0 sign-in with the allowed Google account and approve the `read:ban
 - "Find coffee transactions over EUR 4 this month."
 - "Compare this month with last month."
 
-Expected tool discovery order is `get_connection_status`, then the narrowest data tool needed. Every tool advertises read-only, non-destructive annotations and requires the narrow `read:bank_data` OAuth scope.
+Expected tool discovery order is `get_connection_status`, then the narrowest data tool needed. Bank tools advertise read-only, non-destructive annotations and require `read:bank_data`. Classification writes advertise write annotations and require both `read:bank_data` and `write:classifications`.
 
 ## 4. Verify before inviting anyone
 
@@ -84,4 +84,10 @@ Keep the same MCP boundary. Before ChatGPT directory submission:
 - complete the current ChatGPT app submission requirements and live reviewer OAuth test
 - commission legal/privacy review for the countries you support
 
-The public product should remain read-only until a separate, strongly confirmed write-action design exists.
+Bank access remains read-only. Classification label writes require separate OAuth authorization and explicit user direction.
+
+## Authorize classification labels
+
+Add `write:classifications` as a separate Auth0 API permission. Keep the default third-party grant restricted to `read:bank_data`. Grant the write permission only to a client that the owner authorizes to save classification labels, then obtain a new token with both scopes. Existing read tokens retain read-only access.
+
+Protected-resource metadata and write-tool metadata advertise the separate permission. The server rejects a write before storage when either scope is absent. Listing rules, upserting rules, deleting rules, and supported one-off overrides do not need active bank consent. These tools change labels and cannot move money. See [the classification and identity contract](mcp-financial-contract.md) for matching fields and override limits.
