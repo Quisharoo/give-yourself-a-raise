@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import { getWebUserSubject } from "@/lib/auth/web-user";
+
 import {
   ENABLE_BANKING_STATE_COOKIE,
   createEnableBankingState,
@@ -11,6 +13,8 @@ import {
 import type { EnableBankingPsuType } from "@/lib/enable-banking/types";
 
 export async function GET(request: NextRequest) {
+  const subject = await getWebUserSubject(request);
+  if (!subject) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   const baseUrl = process.env.APP_BASE_URL?.trim() || request.nextUrl.origin;
   const canonicalUrl = new URL(baseUrl);
   const currentHost =
@@ -63,8 +67,8 @@ export async function GET(request: NextRequest) {
     });
 
     return response;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to start consent flow";
+  } catch {
+    const message = "Unable to start consent flow. Please try again.";
     return NextResponse.redirect(
       new URL(`/?error=${encodeURIComponent(message)}`, baseUrl),
     );

@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+
+import { getWebUserSubject } from "@/lib/auth/web-user";
+import { getBankConnection } from "@/lib/connections/store";
 
 import { AnalysisPanel } from "@/app/analysis-panel";
 import { sampleSpendingAnalysisFixture } from "@/lib/analysis/fixtures";
 import {
-  ENABLE_BANKING_SESSION_COOKIE,
   hasEnableBankingConfig,
 } from "@/lib/enable-banking/client";
 
@@ -21,16 +24,18 @@ export default async function Home({
   const resolvedSearchParams = await searchParams;
   const isConfigured = hasEnableBankingConfig();
   const callbackError = firstValue(resolvedSearchParams.error);
-  const connected = firstValue(resolvedSearchParams.connected) === "1";
+  const subject = await getWebUserSubject();
+  if (!subject) redirect("/login");
+  const connection = isConfigured ? await getBankConnection(subject) : null;
+  const connected = Boolean(connection) && firstValue(resolvedSearchParams.connected) === "1";
   const expectedOrigin = getExpectedOrigin();
   const callbackUrl = getCallbackUrl();
   const headerStore = await headers();
-  const cookieStore = await cookies();
   const currentHost =
     headerStore.get("x-forwarded-host") ||
     headerStore.get("host") ||
     null;
-  const hasSession = Boolean(cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value);
+  const hasSession = Boolean(connection);
   const shouldUseFixtureOnFirstPaint = isLocalHost(currentHost) && !hasSession;
   const bankCountries = [
     { code: "IE", label: "Ireland" },
@@ -41,6 +46,11 @@ export default async function Home({
     <main className="mx-auto flex min-h-[100dvh] w-full max-w-[1400px] flex-1 flex-col gap-5 px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
       <section className="topline-bar">
         <p className="eyebrow">Give Yourself a Raise</p>
+        {hasSession ? (
+          <form action="/api/enable-banking/disconnect" method="post">
+            <button className="button button-secondary" type="submit">Disconnect bank</button>
+          </form>
+        ) : null}
       </section>
 
       {callbackError ? <Callout tone="danger">{callbackError}</Callout> : null}

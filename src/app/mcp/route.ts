@@ -26,7 +26,9 @@ async function handleMcp(request: Request) {
     });
     const server = createMcpServer(user.subject, appBaseUrl);
     await server.connect(transport);
-    return transport.handleRequest(request);
+    const response = await transport.handleRequest(request);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   } catch (error) {
     if (error instanceof McpAuthenticationError) {
       logMcpEvent("authentication_required", request, { reason: error.message });
@@ -35,6 +37,7 @@ async function handleMcp(request: Request) {
         { error: "unauthorized", error_description: error.message },
         {
           headers: {
+            "Cache-Control": "no-store",
             "WWW-Authenticate": `Bearer resource_metadata=\"${metadataUrl}\", scope=\"${MCP_ACCESS_SCOPE}\"`,
           },
           status: 401,
@@ -48,7 +51,10 @@ async function handleMcp(request: Request) {
       method: request.method,
       route: "/mcp",
     }));
-    return Response.json({ error: "server_error" }, { status: 500 });
+    return Response.json({ error: "server_error" }, {
+      headers: { "Cache-Control": "no-store" },
+      status: 500,
+    });
   }
 }
 

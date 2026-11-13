@@ -22,9 +22,12 @@ Set these deployment variables:
 - `CLERK_SECRET_KEY`
 - `AUTH0_ISSUER_BASE_URL`
 - `AUTH0_AUDIENCE=https://YOUR_HOST`
-- `PRIVATE_PLUGIN_SUBJECT` set to the subject owning the existing bank connection
+- `AUTH0_OWNER_SUBJECT` set to the exact Auth0 user ID of the intended owner
+- `PRIVATE_PLUGIN_SUBJECT` set to the Clerk user ID owning the existing bank connection
 
-For a single-owner test, keep both the ChatGPT app and Auth0 login allowlist private. Before a public release, replace the single-owner subject mapping with an explicit Clerk-to-Auth0 account-linking table.
+Obtain the Auth0 subject from the authoritative user record. Do not substitute an email, OAuth client ID, or Clerk ID. Set both subjects before deploying the owner check. Missing values deny MCP requests. The API verifies the Auth0 owner before mapping to the Clerk-owned record, independently of the post-login Action.
+
+Keep the connector and Auth0 login allowlist private. Hosted Grokbot and other compatible clients use the same bearer-only endpoint, with no browser cookie or Origin requirement. The app does not restrict access by client brand. A public multi-user release needs a separate account-linking design.
 
 ## 2. Configure Enable Banking
 
@@ -33,6 +36,10 @@ Set `ENABLE_BANKING_APPLICATION_ID` and `ENABLE_BANKING_PRIVATE_KEY_PEM`. Regist
 `https://YOUR_HOST/api/enable-banking/callback`
 
 Set `APP_BASE_URL=https://YOUR_HOST`. Sign in to the deployed web app and connect Revolut. The callback encrypts the resulting Enable Banking session ID with `BANK_CONNECTION_ENCRYPTION_KEY` and stores it under the Clerk user ID.
+
+Only the configured Clerk owner can start or complete consent and read the stored connection. The browser receives a consent-state cookie, not a raw banking session credential. A partial Clerk configuration disables web access. With both Clerk keys absent, the configured fallback password gate issues owner-bound tokens that expire after twelve hours.
+
+Use separate database, encryption, and banking credentials for preview deployments, or leave those settings unavailable there. Production credentials must not be assigned to the preview environment.
 
 ## 3. Connect ChatGPT privately
 
@@ -57,11 +64,14 @@ Expected tool discovery order is `get_connection_status`, then the narrowest dat
 
 - An unauthenticated `POST /mcp` returns `401` with a `WWW-Authenticate` header pointing to protected-resource metadata.
 - The metadata resource, Auth0 issuer, audience, and ChatGPT MCP URL agree exactly.
-- One Clerk user cannot read another user's stored connection.
+- A different Auth0 user cannot reach the owner's tools, even with a correctly signed token and `read:bank_data`.
+- A different Clerk user cannot start consent, replace the connection, or read the owner's data.
 - Tool results never include an IBAN, provider account ID, Enable Banking session ID, or raw provider payload.
-- Disconnect revokes the Enable Banking session and deletes the encrypted database row.
-- Removing the ChatGPT/Auth0 grant prevents later MCP calls.
+- Disconnect requires a same-origin POST, revokes the selected Enable Banking session, and conditionally deletes its row. Failed revocation retains the row for retry. A concurrent replacement survives.
+- Removing the connector's Auth0 grant prevents renewal. Already-issued access tokens can remain valid until their expiry. Disconnecting the bank removes the connection available to those tokens.
 - `/privacy` and `/terms` are public and accurate.
+
+Run `npm test`, `npm run typecheck`, `npm run lint`, `npm run smoke:mcp`, and `npm run build`. The connector tests use synthetic signed JWTs and a local JWKS server to exercise the actual HTTP handler without calling banking tools. A deployed hosted-connector acceptance check is separate from these local checks.
 
 ## 5. Promote to public
 

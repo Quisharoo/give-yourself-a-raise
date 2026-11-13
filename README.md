@@ -11,7 +11,7 @@ Diagnosis-first spending analysis on top of Enable Banking, available as a priva
 - keeps `fixed costs` as context instead of fake cut opportunities
 - ranks a small set of high-confidence spending levers
 - exposes five OAuth-protected MCP tools for private ChatGPT conversations
-- encrypts the stored Enable Banking session ID and binds it to the signed-in user
+- encrypts the stored Enable Banking session ID and binds it to the configured owner
 
 ## Current Product Shape
 
@@ -32,7 +32,9 @@ This repo is not a budgeting dashboard. The core promise is:
 - `/api/enable-banking/connect`
   - starts bank consent
 - `/api/enable-banking/callback`
-  - completes consent and stores the session cookie
+  - completes consent and stores the encrypted connection under the authenticated owner
+- `/api/enable-banking/disconnect`
+  - accepts an owner-authenticated, same-origin POST to revoke the connection
 - `/api/enable-banking/session`
   - raw linked-account JSON
 - `/api/enable-banking/analysis`
@@ -108,7 +110,17 @@ openssl rand -base64 32    # BANK_CONNECTION_ENCRYPTION_KEY
 - do not commit `.env*` files
 - do not commit private keys or local certs
 - set `APP_BASE_URL` to the deployed app origin used for the Enable Banking callback
+- set `PRIVATE_PLUGIN_SUBJECT` to the Clerk user ID that owns the existing bank connection
+- set `AUTH0_OWNER_SUBJECT` to the intended owner's exact Auth0 user ID, which is distinct from the Clerk user ID
 - use `APP_LOGIN_PASSWORD`, `APP_LOGIN_SECRET`, and `PRIVATE_PLUGIN_SUBJECT` as the temporary single-owner web gate until Clerk is configured
+
+MCP requires both owner subjects. It verifies the Auth0 subject before selecting the existing Clerk-owned row. Hosted Grokbot, ChatGPT, and other compatible clients use bearer tokens without website cookies. Missing owner configuration denies access.
+
+Website access requires complete Clerk configuration or, with both Clerk keys absent, complete fallback password configuration. Partial Clerk configuration fails closed. Fallback login tokens bind the owner and expire on the server after twelve hours. The security update rejects old fallback tokens, so those sessions must sign in again.
+
+Web bank reads use only the authenticated owner's database record. Raw bank-session cookies no longer authorize reads. Disconnect preserves the row when provider revocation fails and preserves a replacement saved during a concurrent reconnect.
+
+Keep production database, banking, and encryption credentials out of preview deployments. Local bank-payload capture is disabled in production and on Vercel even if `ENABLE_BANKING_CAPTURE_LOCAL=1` is set. Local captures contain sensitive financial data and belong only in a private development environment.
 
 ## Private ChatGPT Setup
 
