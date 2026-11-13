@@ -25,6 +25,8 @@ test("publishes the private Revolut tool set", () => {
       "find_transactions",
       "get_transaction_totals",
       "compare_spending_periods",
+      "list_classification_rules",
+      "get_recurring_transactions",
     ],
   );
 });

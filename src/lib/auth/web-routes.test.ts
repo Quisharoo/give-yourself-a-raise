@@ -10,6 +10,8 @@ let clerkUser: string | null = "user_private_owner";
 let connection: BankConnection | null;
 let revokeFailure: Error | null = null;
 let readFailure: Error | null = null;
+let providerExpiry: unknown = undefined;
+let savedConsentExpiry: string | null | undefined = undefined;
 const effects: string[] = [];
 const cookieValues = new Map<string, string>();
 
@@ -33,12 +35,13 @@ replaceExports("next/headers", {
 });
 replaceExports("../connections/store", {
   getBankConnection: async (subject: string) => { effects.push(`load:${subject}`); return connection; },
-  saveBankConnection: async () => { effects.push("save"); },
+  saveBankConnection: async (input: { consentExpiresAt: string | null }) => { effects.push("save"); savedConsentExpiry = input.consentExpiresAt; },
   deleteBankConnection: async (subject: string, sessionId: string) => {
     effects.push(`delete:${subject}:${sessionId}`);
     return true;
   },
 });
+replaceExports("../analysis/rule-store", { listFinancialRules: async () => [] });
 replaceExports("../enable-banking/client", {
   hasEnableBankingConfig: () => true,
   getSessionOverview: async (sessionId: string) => {
@@ -48,7 +51,7 @@ replaceExports("../enable-banking/client", {
   },
   getSession: async (sessionId: string) => { effects.push(`read:${sessionId}`); return { accounts: [], session_id: "private-provider-session" }; },
   startAuthorization: async () => { effects.push("authorize"); return { url: "https://bank.example/consent" }; },
-  createSession: async () => { effects.push("create"); return { session_id: "created-session" }; },
+  createSession: async () => { effects.push("create"); return { session_id: "created-session", access: { valid_until: providerExpiry } }; },
   deleteSession: async (sessionId: string) => {
     effects.push(`revoke:${sessionId}`);
     if (revokeFailure) throw revokeFailure;
@@ -71,9 +74,10 @@ beforeEach(() => {
   process.env.APP_LOGIN_SECRET = "test-signing-secret";
   delete process.env.ENABLE_BANKING_CAPTURE_LOCAL;
   clerkUser = "user_private_owner";
-  connection = { connectedAt: "2026-11-13", consentExpiresAt: null, country: "IE", provider: "Test", sessionId: "stored-owner-session", subject: "user_private_owner" };
+  connection = { connectionId: "synthetic-generation", connectedAt: "2026-11-13", consentExpiresAt: null, country: "IE", provider: "Test", sessionId: "stored-owner-session", subject: "user_private_owner" };
   revokeFailure = null;
   readFailure = null;
+  providerExpiry = undefined; savedConsentExpiry = undefined;
   effects.length = 0;
   cookieValues.clear();
   cookieValues.set("enable_banking_session_id", "attacker-cookie-session");
@@ -258,5 +262,13 @@ test("web bank data is not cacheable and session credentials stay server-side", 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.doesNotMatch(await response.text(), /private-provider-session|session_id/);
+  }
+});
+
+test("callback persists actual provider expiry and keeps missing or malformed expiry unknown", async () => {
+  for (const [provider, expected] of [["2026-12-02T10:00:00Z", "2026-12-02T10:00:00.000Z"], [undefined, null], ["bad", null]] as const) {
+    providerExpiry = provider;
+    const response = await callbackRoute.GET(request("/api/enable-banking/callback?code=test-code&state=state"));
+    assert.equal(response.status, 307); assert.equal(savedConsentExpiry, expected);
   }
 });

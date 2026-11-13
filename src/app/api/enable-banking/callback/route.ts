@@ -9,6 +9,7 @@ import {
   ENABLE_BANKING_SESSION_COOKIE,
   ENABLE_BANKING_STATE_COOKIE,
   extractPsuHeaders,
+  sessionConsentExpiry,
 } from "@/lib/enable-banking/client";
 
 export async function GET(request: NextRequest) {
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
 
     createdSessionId = sessionId;
     await saveBankConnection({
-      consentExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      consentExpiresAt: sessionConsentExpiry(session),
       country: process.env.PRIVATE_PLUGIN_BANK_COUNTRY?.trim() || "IE",
       provider: "Revolut",
       sessionId,

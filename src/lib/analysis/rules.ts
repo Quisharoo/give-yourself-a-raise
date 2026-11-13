@@ -44,20 +44,6 @@ export const CONTROLLABILITY_SCORES: Record<CategoryKey, number> = {
   utilities: 0.1,
 };
 
-export const WEALTH_FLOW_KEYWORDS = [
-  "instant access savings",
-  "trade republic",
-  "trading 212",
-  "to eur",
-  "to usd",
-  "to gbp",
-  "to aed",
-  "from instant access savings",
-  "exchanged to",
-  "to savings",
-  "investment",
-];
-
 export const AMBIGUOUS_FAMILIES = [
   "amazon",
   "apple",
@@ -179,10 +165,10 @@ export function getRuleCategory(text: string): CategoryKey | null {
 }
 
 export function detectMerchantFamily(text: string): string | undefined {
-  if (text.includes("apple")) {
+  if (/\bapple\b/.test(text)) {
     return "apple";
   }
-  if (text.includes("amazon") || text.includes("amzn")) {
+  if (/\b(?:amazon|amzn)\b/.test(text)) {
     return "amazon";
   }
   if (text.includes("google")) {

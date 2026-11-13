@@ -72,6 +72,11 @@ interface TransactionsQuery {
 }
 
 export class EnableBankingError extends Error {
+  get code(): string | null {
+    return typeof this.details === "object" && this.details !== null &&
+      "error" in this.details && typeof this.details.error === "string"
+      ? this.details.error : null;
+  }
   constructor(
     message: string,
     public readonly status?: number,
@@ -80,6 +85,15 @@ export class EnableBankingError extends Error {
     super(message);
     this.name = "EnableBankingError";
   }
+}
+
+export function sessionConsentExpiry(session: EnableBankingSession): string | null {
+  const value = session.access?.valid_until;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const timestamp = Date.parse(value);
+  const calendarDay = value.slice(0, 10);
+  if (!Number.isFinite(timestamp) || new Date(`${calendarDay}T00:00:00Z`).toISOString().slice(0, 10) !== calendarDay) return null;
+  return new Date(timestamp).toISOString();
 }
 
 export function hasEnableBankingConfig(): boolean {

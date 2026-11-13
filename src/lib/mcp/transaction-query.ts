@@ -1,7 +1,13 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
-import { getSpendingTransactions } from "@/lib/analysis/engine";
+import {
+  normalizeTransaction,
+  financialFilterShape,
+  matchesFinancialFilter,
+  type FinancialRule,
+} from "@/lib/analysis/classification";
+import { CATEGORY_LABELS } from "@/lib/analysis/rules";
 import type {
   EnableBankingAccountSnapshot,
   EnableBankingSession,
@@ -29,6 +35,7 @@ const amountFilter = z.union([
 ]);
 const statusSchema = z.enum([...BANK_TRANSACTION_STATUSES, "UNKNOWN", "all"]);
 const queryShape = {
+  ...financialFilterShape,
   status: statusSchema.optional(),
   account_refs: z
     .array(z.string().regex(/^acc_[A-Za-z0-9_-]{43}$/))
@@ -46,6 +53,7 @@ export const transactionQuerySchema = z.object(queryShape).strict();
 export const transactionPageSchema = z
   .object({
     ...queryShape,
+    detail: z.enum(["compact", "full"]).optional(),
     cursor: z.string().max(12000).optional(),
     limit: z.number().int().min(1).max(50).optional(),
   })
@@ -53,6 +61,10 @@ export const transactionPageSchema = z
 
 const resolvedQuerySchema = z
   .object({
+    purpose: financialFilterShape.purpose,
+    project: financialFilterShape.project,
+    flow_kind: financialFilterShape.flow_kind,
+    currency: financialFilterShape.currency,
     status: statusSchema,
     account_refs: z.array(z.string()),
     category: z.string().nullable(),
@@ -166,6 +178,10 @@ export function readTransactionQuery(
   const defaults = cursor?.query ?? defaultDateRange(30, now);
   const values = { ...defaults, ...parsed.data };
   const query: TransactionQuery = {
+    ...(values.purpose ? { purpose: values.purpose } : {}),
+    ...(values.project ? { project: values.project } : {}),
+    ...(values.flow_kind ? { flow_kind: values.flow_kind } : {}),
+    ...(values.currency ? { currency: values.currency } : {}),
     status: values.status ?? "BOOK",
     account_refs: [...new Set(values.account_refs ?? [])].sort(),
     category: values.category ?? null,
@@ -192,10 +208,14 @@ export function readTransactionQuery(
   return {
     query,
     cursor,
+    detail:
+      "detail" in parsed.data && parsed.data.detail === "full"
+        ? "full"
+        : "compact",
     limit:
       "limit" in parsed.data && typeof parsed.data.limit === "number"
         ? parsed.data.limit
-        : 20,
+        : 50,
   };
 }
 
@@ -227,20 +247,40 @@ export function queryTransactions(
   accounts: EnableBankingAccountSnapshot[],
   query: TransactionQuery,
   scope: QueryScope,
+  rules: readonly FinancialRule[] = [],
 ) {
   const rows = accounts
     .flatMap((account) =>
       account.transactions.map((transaction) => {
         const money = transactionMoney(transaction);
-        const [classified] = getSpendingTransactions([
-          { ...account, transactions: [transaction] },
-        ]);
+        const classified = normalizeTransaction(
+          account.accountId,
+          transaction,
+          rules,
+        );
         if (!validCalendarDate(classified.date))
           throw new TransactionInputError(
             "The bank returned an invalid transaction date.",
           );
         const row = {
-          ...classified,
+          date: classified.date,
+          currency: classified.currency,
+          merchant: classified.merchant,
+          category_key: classified.classification.categoryKey,
+          category_label:
+            CATEGORY_LABELS[classified.classification.categoryKey],
+          flow_kind: classified.economicFlow,
+          purpose: classified.purpose,
+          project: classified.project,
+          classification_source: classified.matchedRuleId
+            ? "user_rule"
+            : classified.classification.source,
+          classification_reason: classified.matchedRuleId
+            ? "Matched a persisted user classification rule."
+            : classified.classification.reason,
+          confidence: classified.classification.confidence,
+          matched_rule_id: classified.matchedRuleId,
+          raw_descriptor: classified.rawDescriptor,
           status: transactionStatus(transaction.status),
           zero_amount: money.magnitude.coefficient === BigInt(0),
           event_kind: transactionEventKind(transaction.bank_transaction_code),
@@ -249,21 +289,20 @@ export function queryTransactions(
           provider_amount_decimal: transaction.transaction_amount.amount,
           account_ref: accountRef(scope, account.accountId),
         };
-        const identity = JSON.stringify([
-          row,
-          transaction.entry_reference ?? null,
-        ]);
-        return { row, money, identity };
+        const identity = JSON.stringify([classified.sourceKey]);
+        return { row, money, identity, classified };
       }),
     )
     .filter(
-      ({ row, money }) =>
+      ({ row, money, classified }) =>
+        matchesFinancialFilter(classified, query) &&
         (query.status === "all" || row.status === query.status) &&
         row.date >= query.date_from &&
         row.date <= query.date_to &&
-        (!query.category || row.categoryKey === query.category) &&
+        (!query.category || row.category_key === query.category) &&
         (!query.merchant ||
-          row.merchant.toLowerCase().includes(query.merchant)) &&
+          row.merchant.toLowerCase().includes(query.merchant) ||
+          row.raw_descriptor.toLowerCase().includes(query.merchant)) &&
         (query.min_amount === null ||
           compareDecimal(money.magnitude, parseDecimal(query.min_amount)) >=
             0) &&
@@ -287,9 +326,15 @@ export function queryTransactions(
   return {
     transactions,
     fingerprint: createHash("sha256")
-      .update(JSON.stringify(transactions))
+      .update(
+        JSON.stringify([
+          [...rules].sort((a, b) => a.id.localeCompare(b.id)),
+          transactions,
+        ]),
+      )
       .digest("hex"),
     totals: exactTotals(rows),
+    classified_totals: classifiedTotals(rows),
     status_counts: Object.fromEntries(
       [...BANK_TRANSACTION_STATUSES, "UNKNOWN"].map((status) => [
         status,
@@ -343,6 +388,35 @@ function exactTotals(rows: MoneyRow[]) {
     }));
 }
 
+function classifiedTotals(
+  rows: Array<MoneyRow & { row: MoneyRow["row"] & { flow_kind: string } }>,
+) {
+  return [...new Set(rows.map(({ row }) => row.currency))]
+    .sort()
+    .map((currency) => {
+      const same = rows.filter(({ row }) => row.currency === currency);
+      function sum(flow: string) {
+        return formatDecimal(
+          same
+            .filter(({ row }) => row.flow_kind === flow)
+            .reduce(
+              (total, { money }) => addDecimal(total, money.magnitude),
+              parseDecimal("0"),
+            ),
+        );
+      }
+      return {
+        currency,
+        expense: sum("expense"),
+        income: sum("income"),
+        revenue: sum("revenue"),
+        refund: sum("refund"),
+        transfer: sum("transfer"),
+        unknown: sum("unknown"),
+      };
+    });
+}
+
 export function transactionResult(
   result: ReturnType<typeof queryTransactions>,
   request: ReturnType<typeof readTransactionQuery>,
@@ -356,7 +430,45 @@ export function transactionResult(
       "Bank transactions changed. Restart the search to avoid missing or repeating rows.",
     );
   const offset = cursor?.offset ?? 0;
-  const end = Math.min(offset + limit, result.transactions.length);
+  const requestedEnd = Math.min(offset + limit, result.transactions.length);
+  const candidates = result.transactions
+    .slice(offset, requestedEnd)
+    .map((row) => ({
+      transaction_ref: row.transaction_ref,
+      account_ref: row.account_ref,
+      date: row.date,
+      amount_decimal: row.amount_decimal,
+      currency: row.currency,
+      merchant: row.merchant,
+      status: row.status,
+      category_key: row.category_key,
+      flow_kind: row.flow_kind,
+      purpose: row.purpose,
+      project: row.project,
+      ...(request.detail === "full"
+        ? {
+            raw_descriptor: row.raw_descriptor,
+            provider_amount_decimal: row.provider_amount_decimal,
+            category_label: row.category_label,
+            confidence: row.confidence,
+            matched_rule_id: row.matched_rule_id,
+            classification_source: row.classification_source,
+            classification_reason: row.classification_reason,
+            event_kind: row.event_kind,
+            zero_amount: row.zero_amount,
+          }
+        : {}),
+    }));
+  const transactions: typeof candidates = [];
+  let pageBytes = 2;
+  for (const row of candidates) {
+    const bytes =
+      Buffer.byteLength(JSON.stringify(row)) + (transactions.length ? 1 : 0);
+    if (pageBytes + bytes > 12_000 && transactions.length) break;
+    transactions.push(row);
+    pageBytes += bytes;
+  }
+  const end = offset + transactions.length;
   const payload: Cursor = {
     version: 1,
     query,
@@ -375,11 +487,13 @@ export function transactionResult(
       ? { totals_by_status: result.totals_by_status }
       : {}),
     totals: result.totals,
+    classified_totals: result.classified_totals,
     totals_scope:
       "Exact totals of all matching bank-returned rows before pagination, by currency. Bank history completeness and card balance reconciliation are not guaranteed.",
     ...(paging
       ? {
-          transactions: result.transactions.slice(offset, end),
+          transactions,
+          page_limited_by_size: end < requestedEnd,
           next_cursor:
             end < result.transactions.length
               ? `${encoded}.${sign(scope, "transaction-cursor-v1", encoded)}`

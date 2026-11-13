@@ -1,39 +1,20 @@
+import { normalizeTransaction, type NormalizedTransaction, type FinancialRule, matchesFinancialFilter, type FinancialFilter } from "@/lib/analysis/classification";
 import {
-  formatDecimal,
-  transactionMoney,
   transactionStatus,
   transactionStatusCounts,
 } from "@/lib/transactions";
-import type { EnableBankingAccountSnapshot, EnableBankingTransaction } from "@/lib/enable-banking/types";
+import type { EnableBankingAccountSnapshot } from "@/lib/enable-banking/types";
 import {
-  AMBIGUOUS_FAMILIES,
   CATEGORY_LABELS,
   CONTROLLABILITY_SCORES,
-  WEALTH_FLOW_KEYWORDS,
-  detectMerchantFamily,
-  getRuleCategory,
 } from "@/lib/analysis/rules";
 import type {
   CategoryKey,
   Confidence,
-  FlowKind,
   PatternKind,
   SpendingAnalysis,
   SpendingTransaction,
-  TransactionClassification,
 } from "@/lib/analysis/types";
-
-interface NormalizedTransaction {
-  absAmount: number;
-  accountId: string;
-  classification: TransactionClassification;
-  currency: string;
-  date: string;
-  description: string;
-  merchant: string;
-  signedAmount: number;
-  transaction: EnableBankingTransaction;
-}
 
 interface MerchantAggregate {
   averageSpend: number;
@@ -57,14 +38,14 @@ const ONE_OFF_THRESHOLD = 100;
 
 export function analyzeSpending(
   accounts: EnableBankingAccountSnapshot[],
-  options: { windowDays?: number } = {},
+  options: { windowDays?: number; rules?: FinancialRule[]; filters?: FinancialFilter } = {},
 ): SpendingAnalysis {
   const windowDays = normalizeWindowDays(options.windowDays);
   const normalized = accounts.flatMap((account) =>
     account.transactions
       .filter((transaction) => transactionStatus(transaction.status) === "BOOK")
-      .map((transaction) => normalizeTransaction(account.accountId, transaction)),
-  );
+      .map((transaction) => normalizeTransaction(account.accountId, transaction, options.rules)),
+  ).filter((row) => matchesFinancialFilter(row, options.filters));
 
   const statusCounts = transactionStatusCounts(
     accounts.flatMap((account) => account.transactions),
@@ -234,8 +215,8 @@ function buildMerchantAggregates(
     const averageSpend = totalSpend / count;
     const classification = sorted[0].classification;
     const pattern = detectPattern(sorted, averageSpend);
-    const upgradedCategory = upgradeAggregateCategory(classification.categoryKey, classification.merchantFamily, pattern);
-    const confidence = upgradeConfidence(classification.confidence, upgradedCategory, classification.categoryKey);
+    const upgradedCategory = classification.categoryKey;
+    const confidence = classification.confidence;
 
     return {
       averageSpend,
@@ -348,163 +329,6 @@ function detectPattern(transactions: NormalizedTransaction[], averageSpend: numb
   return "sporadic";
 }
 
-function normalizeTransaction(accountId: string, transaction: EnableBankingTransaction): NormalizedTransaction {
-  const signedAmount = Number(formatDecimal(transactionMoney(transaction).signed));
-  const absAmount = Math.abs(signedAmount);
-  const merchant = deriveMerchantLabel(transaction);
-  const description = normalizeText(
-    [merchant, transaction.note, ...(transaction.remittance_information ?? [])]
-      .filter(Boolean)
-      .join(" "),
-  );
-  const normalizedMerchant = normalizeText(merchant);
-  const merchantFamily = detectMerchantFamily(`${normalizedMerchant} ${description}`);
-  const classification = classifyTransaction(transaction, signedAmount, normalizedMerchant, merchant, description, merchantFamily);
-
-  return {
-    absAmount,
-    accountId,
-    classification,
-    currency: transaction.transaction_amount.currency,
-    date: transaction.booking_date || transaction.value_date || transaction.transaction_date || "0000-00-00",
-    description,
-    merchant,
-    signedAmount,
-    transaction,
-  };
-}
-
-function classifyTransaction(
-  transaction: EnableBankingTransaction,
-  signedAmount: number,
-  normalizedMerchant: string,
-  merchant: string,
-  description: string,
-  merchantFamily?: string,
-): TransactionClassification {
-  const bankCode = transaction.bank_transaction_code?.code?.toUpperCase() || "UNKNOWN";
-  const haystack = `${normalizedMerchant} ${description}`.trim();
-
-  if (signedAmount > 0) {
-    return {
-      categoryKey: "uncategorized",
-      confidence: "medium",
-      flowKind: "income_or_refund",
-      merchantFamily,
-      merchantLabel: merchant,
-      normalizedMerchant,
-      reason: "Inbound transaction or refund.",
-      source: "heuristic",
-    };
-  }
-
-  if (bankCode === "EXCHANGE") {
-    return buildClassification("wealth_flow", "fx_money_movement", "high", merchantFamily, merchant, normalizedMerchant, "FX or wallet exchange.", "heuristic");
-  }
-
-  if (bankCode === "TRANSFER") {
-    if (containsAny(haystack, WEALTH_FLOW_KEYWORDS)) {
-      return buildClassification("wealth_flow", "investment_savings", "high", merchantFamily, merchant, normalizedMerchant, "Savings, investing, or internal money movement.", "heuristic");
-    }
-
-    const fixedTransferCategory = getFixedCostCategory(haystack);
-    if (fixedTransferCategory) {
-      return buildClassification("fixed_cost", fixedTransferCategory, "high", merchantFamily, merchant, normalizedMerchant, "Recurring baseline transfer-like outflow.", "rule");
-    }
-
-    return buildClassification("unknown", "uncategorized", "low", merchantFamily, merchant, normalizedMerchant, "Transfer not safely attributable to discretionary spend.", "heuristic");
-  }
-
-  if (bankCode === "CHARGE") {
-    return buildClassification("fixed_cost", "banking_fees", "high", merchantFamily, merchant, normalizedMerchant, "Banking or platform fee.", "rule");
-  }
-
-  if (bankCode === "ATM") {
-    return buildClassification("behavioural_spend", "cash_withdrawal", "medium", merchantFamily, merchant, normalizedMerchant, "Cash withdrawal.", "rule");
-  }
-
-  if (bankCode === "CARD_PAYMENT" || bankCode === "UNKNOWN") {
-    return classifyCardLikeTransaction(haystack, merchantFamily, merchant, normalizedMerchant);
-  }
-
-  return buildClassification("unknown", "uncategorized", "low", merchantFamily, merchant, normalizedMerchant, "Unclassified outflow.", "heuristic");
-}
-
-function classifyCardLikeTransaction(
-  haystack: string,
-  merchantFamily: string | undefined,
-  merchant: string,
-  normalizedMerchant: string,
-): TransactionClassification {
-  const fixedCostCategory = getFixedCostCategory(haystack);
-  if (fixedCostCategory) {
-    return buildClassification("fixed_cost", fixedCostCategory, "high", merchantFamily, merchant, normalizedMerchant, "Merchant matched fixed-cost rules.", "rule");
-  }
-
-  const ruleCategory = getRuleCategory(haystack);
-  if (ruleCategory) {
-    return buildClassification("behavioural_spend", ruleCategory, "high", merchantFamily, merchant, normalizedMerchant, "Merchant matched category rules.", "rule");
-  }
-
-  if (merchantFamily && AMBIGUOUS_FAMILIES.includes(merchantFamily)) {
-    const categoryKey = merchantFamily === "apple" || merchantFamily === "google"
-      ? "uncertain_digital"
-      : "uncertain_shopping";
-
-    return buildClassification("behavioural_spend", categoryKey, "low", merchantFamily, merchant, normalizedMerchant, "Ambiguous merchant family kept broad on purpose.", "family");
-  }
-
-  return buildClassification("behavioural_spend", "uncategorized", "low", merchantFamily, merchant, normalizedMerchant, "No confident merchant rule matched.", "heuristic");
-}
-
-function getFixedCostCategory(text: string): CategoryKey | null {
-  if (containsAny(text, ["mortgage", "rent", "housing"])) {
-    return "housing";
-  }
-
-  if (containsAny(text, ["yuno energy", "virgin media", "moco", "utility", "electric", "gas", "broadband"])) {
-    return "utilities";
-  }
-
-  if (containsAny(text, ["plan fee", "premium repricing"])) {
-    return "banking_fees";
-  }
-
-  return null;
-}
-
-function upgradeAggregateCategory(
-  currentCategory: CategoryKey,
-  merchantFamily: string | undefined,
-  pattern: PatternKind,
-): CategoryKey {
-  if (pattern === "subscription_candidate") {
-    return "subscriptions";
-  }
-
-  if (merchantFamily === "apple" || merchantFamily === "google") {
-    return currentCategory === "uncategorized" ? "uncertain_digital" : currentCategory;
-  }
-
-  if (merchantFamily === "amazon" || merchantFamily === "paypal") {
-    return currentCategory === "uncategorized" ? "uncertain_shopping" : currentCategory;
-  }
-
-  return currentCategory;
-}
-
-function upgradeConfidence(
-  current: Confidence,
-  upgradedCategory: CategoryKey,
-  originalCategory: CategoryKey,
-): Confidence {
-  if (upgradedCategory === "subscriptions" && originalCategory !== "subscriptions") {
-    return current === "low" ? "medium" : current;
-  }
-
-  return current;
-}
-
 function shouldExcludeAggregateFromLeverMath(aggregate: MerchantAggregate) {
   return (
     aggregate.pattern === "one_off" &&
@@ -521,46 +345,6 @@ function detectPrimaryCurrency(transactions: NormalizedTransaction[]) {
 
   const ranked = Array.from(byCurrency.entries()).sort((left, right) => right[1] - left[1]);
   return ranked[0]?.[0] ?? null;
-}
-
-function deriveMerchantLabel(transaction: EnableBankingTransaction) {
-  if (transaction.credit_debit_indicator === "DBIT") {
-    return (
-      transaction.creditor?.name ||
-      transaction.remittance_information?.[0] ||
-      transaction.note ||
-      "Unknown"
-    );
-  }
-
-  return (
-    transaction.debtor?.name ||
-    transaction.remittance_information?.[0] ||
-    transaction.note ||
-    "Unknown"
-  );
-}
-
-function buildClassification(
-  flowKind: FlowKind,
-  categoryKey: CategoryKey,
-  confidence: Confidence,
-  merchantFamily: string | undefined,
-  merchantLabel: string,
-  normalizedMerchant: string,
-  reason: string,
-  source: "family" | "heuristic" | "rule",
-): TransactionClassification {
-  return {
-    categoryKey,
-    confidence,
-    flowKind,
-    merchantFamily,
-    merchantLabel,
-    normalizedMerchant,
-    reason,
-    source,
-  };
 }
 
 function combineConfidence(left: Confidence, right: Confidence): Confidence {
@@ -604,10 +388,6 @@ function hasTightAmounts(amounts: number[], average: number) {
   return deviationRatio <= 0.15;
 }
 
-function containsAny(text: string, keywords: string[]) {
-  return keywords.some((keyword) => text.includes(keyword));
-}
-
 function monthlyEquivalent(amount: number, windowDays: number) {
   return (amount / windowDays) * 30;
 }
@@ -622,14 +402,6 @@ function normalizeWindowDays(value: number | undefined) {
   }
 
   return value;
-}
-
-function normalizeText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
 }
 
 function isUncertainCategory(categoryKey: CategoryKey) {

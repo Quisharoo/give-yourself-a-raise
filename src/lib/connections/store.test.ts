@@ -14,7 +14,7 @@ loaded.exports = {
   ...original,
   neon: () => async (strings: TemplateStringsArray, ...values: string[]) => {
     const query = strings.join("?");
-    if (query.includes("CREATE TABLE")) return [];
+    if (query.includes("CREATE TABLE") || query.includes("ALTER TABLE")) return [];
     if (query.includes("SELECT")) return stored && stored.subject === values[0] ? [{ ...stored }] : [];
     if (query.includes("DELETE")) {
       if (replacementOnDelete && stored) stored.encrypted_session_id = replacementOnDelete;

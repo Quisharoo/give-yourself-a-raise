@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "smoke:mcp": "tsx scripts/smoke-mcp.ts",
+    "verify:storage": "tsx scripts/verify-storage.ts",
     "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

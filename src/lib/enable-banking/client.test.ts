@@ -71,3 +71,24 @@ function syntheticCredentials(context: TestContext) {
     else process.env.ENABLE_BANKING_PRIVATE_KEY_PEM = originalPem;
   });
 }
+
+test("provider expiry parser accepts actual access expiry and treats missing or invalid expiry as unknown", async () => {
+  const { sessionConsentExpiry } = await import("./client");
+  for (const valid_until of [undefined, "not a date", "2026-02-30T00:00:00Z", "2026-11-13", 123])
+    assert.equal(sessionConsentExpiry({ accounts: [], access: { valid_until } }), null);
+  assert.equal(sessionConsentExpiry({ accounts: [], access: { valid_until: "2026-12-01T15:30:00+02:00" } }), "2026-12-01T13:30:00.000Z");
+});
+test("provider structured errors preserve EXPIRED_SESSION separately from unrelated HTTP 401", async (context) => {
+  syntheticCredentials(context);
+  const { getSession, EnableBankingError } = await import("./client");
+  for (const code of ["EXPIRED_SESSION", "INVALID_SIGNATURE"]) {
+    context.mock.method(globalThis, "fetch", async () => Response.json({ error: code, message: "private provider details" }, { status: 401 }));
+    await assert.rejects(getSession("private-session"), (error: unknown) => error instanceof EnableBankingError && error.code === code && error.status === 401);
+  }
+});
+test("a failed later provider page throws rather than returning earlier rows as a complete result", async (context) => {
+  syntheticCredentials(context);
+  let count = 0;
+  context.mock.method(globalThis, "fetch", async () => ++count === 1 ? Response.json({ transactions: [{ entry_reference: "private" }], continuation_key: "next" }) : Response.json({ error: "ASPSP_ERROR" }, { status: 502 }));
+  await assert.rejects(getAllAccountTransactions("private-account")); assert.equal(count, 2);
+});
