@@ -1,6 +1,5 @@
-import { hasAuthConfig } from "@/lib/auth/session";
 import { getSafeNextPath } from "@/lib/auth/paths";
-import { hasClerkConfig } from "@/lib/auth/clerk";
+import { getWebAuthMode } from "@/lib/auth/clerk";
 
 type LoginSearchParams = Promise<{
   error?: string | string[];
@@ -15,8 +14,9 @@ export default async function LoginPage({
   const resolvedSearchParams = await searchParams;
   const error = firstValue(resolvedSearchParams.error);
   const next = getSafeNextPath(firstValue(resolvedSearchParams.next));
-  const isConfigured = hasAuthConfig();
-  const clerkConfigured = hasClerkConfig();
+  const mode = getWebAuthMode();
+  const isConfigured = mode === "password";
+  const clerkConfigured = mode === "clerk";
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-1 flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
@@ -40,8 +40,7 @@ export default async function LoginPage({
 
         {!clerkConfigured && !isConfigured ? (
           <div className="callout callout-warning">
-            Set <span className="font-mono text-xs">APP_LOGIN_PASSWORD</span> and{" "}
-            <span className="font-mono text-xs">APP_LOGIN_SECRET</span> to enable the deploy gate.
+            Sign-in is unavailable on this deployment.
           </div>
         ) : null}
 

@@ -13,13 +13,13 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.7.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@neondatabase/serverless": "^1.1.0",
     "jose": "^6.2.8",
-    "next": "^16.3.0",
+    "next": "^16.4.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@actual-app/api": "^26.5.0",
@@ -29,9 +29,14 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "^16.3.0",
+    "eslint-config-next": "^16.4.6",
     "tailwindcss": "^4",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.15",
     "typescript": "^5"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.8"
+    }
   }
 }

@@ -1,5 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
+import { getPrivateOwnerSubject } from "@/lib/auth/owner";
+
 export const MCP_ACCESS_SCOPE = "read:bank_data";
 
 export interface AuthenticatedMcpUser {
@@ -47,7 +49,7 @@ export function requireBankDataAccess(payload: JWTPayload | undefined): Authenti
     ? payload.scope.split(" ").filter(Boolean)
     : [];
 
-  if (!payload || !tokenSubject || !clientId) {
+  if (!payload || typeof tokenSubject !== "string" || !tokenSubject.trim() || !clientId?.trim()) {
     throw new McpAuthenticationError("Access token is invalid or expired.");
   }
 
@@ -55,7 +57,11 @@ export function requireBankDataAccess(payload: JWTPayload | undefined): Authenti
     throw new McpAuthenticationError(`Access token is missing ${MCP_ACCESS_SCOPE}.`);
   }
 
-  const subject = process.env.PRIVATE_PLUGIN_SUBJECT?.trim() || tokenSubject;
+  const expectedSubject = process.env.AUTH0_OWNER_SUBJECT?.trim();
+  const subject = getPrivateOwnerSubject();
+  if (!expectedSubject || !subject || tokenSubject !== expectedSubject) {
+    throw new McpAuthenticationError("Access token is not authorized.");
+  }
   return { clientId, scopes, subject };
 }
 

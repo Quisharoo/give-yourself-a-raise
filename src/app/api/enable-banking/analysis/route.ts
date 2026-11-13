@@ -1,11 +1,11 @@
 import type { NextRequest } from "next/server";
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { getWebUserSubject } from "@/lib/auth/web-user";
+import { getBankConnection } from "@/lib/connections/store";
 import { analyzeSpending } from "@/lib/analysis/engine";
 import {
   EnableBankingError,
-  ENABLE_BANKING_SESSION_COOKIE,
   extractPsuHeaders,
   getSessionOverview,
   hasEnableBankingConfig,
@@ -15,34 +15,24 @@ import { writeEnableBankingCapture } from "@/lib/enable-banking/local-capture";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  if (!hasEnableBankingConfig()) {
-    return NextResponse.json(
-      {
-        error: "Enable Banking is not configured.",
-      },
-      { status: 503 },
-    );
-  }
-
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(ENABLE_BANKING_SESSION_COOKIE)?.value;
-
-  if (!sessionId) {
-    return NextResponse.json(
-      {
-        error: "No Enable Banking session cookie found.",
-      },
-      { status: 404 },
-    );
-  }
-
-  const dateFrom =
-    request.nextUrl.searchParams.get("dateFrom")?.trim() ??
-    new Date(Date.now() - 1000 * 60 * 60 * 24 * 90).toISOString().slice(0, 10);
-  const dateTo =
-    request.nextUrl.searchParams.get("dateTo")?.trim() ?? new Date().toISOString().slice(0, 10);
-
   try {
+    const subject = await getWebUserSubject(request);
+    if (!subject) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    if (!hasEnableBankingConfig()) {
+      return NextResponse.json({ error: "Enable Banking is not configured." }, { status: 503 });
+    }
+    const connection = await getBankConnection(subject);
+    if (!connection) {
+      return NextResponse.json({ error: "No bank connection found." }, { status: 404 });
+    }
+    const sessionId = connection.sessionId;
+
+    const dateFrom =
+      request.nextUrl.searchParams.get("dateFrom")?.trim() ??
+      new Date(Date.now() - 1000 * 60 * 60 * 24 * 90).toISOString().slice(0, 10);
+    const dateTo =
+      request.nextUrl.searchParams.get("dateTo")?.trim() ?? new Date().toISOString().slice(0, 10);
+
     const overview = await getSessionOverview(
       sessionId,
       {
@@ -75,13 +65,12 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    return NextResponse.json(analysis);
+    return NextResponse.json(analysis, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof EnableBankingError) {
       return NextResponse.json(
         {
-          details: error.details,
-          error: error.message,
+          error: "Unable to read the bank connection. Please try again.",
         },
         { status: error.status ?? 500 },
       );

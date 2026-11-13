@@ -88,10 +88,22 @@ export async function getBankConnection(subject: string): Promise<BankConnection
   };
 }
 
-export async function deleteBankConnection(subject: string) {
+export async function deleteBankConnection(subject: string, expectedSessionId: string): Promise<boolean> {
   const sql = getSql();
   await ensureConnectionSchema();
-  await sql`DELETE FROM bank_connections WHERE subject = ${subject}`;
+  const rows = await sql`
+    SELECT encrypted_session_id FROM bank_connections WHERE subject = ${subject} LIMIT 1
+  `;
+  const encryptedSessionId = rows[0]?.encrypted_session_id;
+  if (typeof encryptedSessionId !== "string" || decryptBankSessionId(encryptedSessionId) !== expectedSessionId) {
+    return false;
+  }
+  const deleted = await sql`
+    DELETE FROM bank_connections
+    WHERE subject = ${subject} AND encrypted_session_id = ${encryptedSessionId}
+    RETURNING subject
+  `;
+  return deleted.length > 0;
 }
 
 export async function ensureConnectionSchema() {

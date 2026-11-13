@@ -164,7 +164,7 @@ async function main() {
   since.setDate(since.getDate() - days);
   const dateFrom = since.toISOString().slice(0, 10);
 
-  console.log(`Pulling EB session ${sessionId} since ${dateFrom}…`);
+  console.log(`Pulling bank transactions since ${dateFrom}…`);
   const overview = await getSessionOverview(sessionId, {
     transactions: { dateFrom },
   } as Parameters<typeof getSessionOverview>[1]);

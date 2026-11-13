@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import { getWebUserSubject } from "@/lib/auth/web-user";
+
 import {
   EnableBankingError,
   findAspsps,
@@ -8,6 +10,8 @@ import {
 } from "@/lib/enable-banking/client";
 
 export async function GET(request: NextRequest) {
+  const subject = await getWebUserSubject(request);
+  if (!subject) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!hasEnableBankingConfig()) {
     return NextResponse.json(
       {
@@ -41,8 +45,7 @@ export async function GET(request: NextRequest) {
     if (error instanceof EnableBankingError) {
       return NextResponse.json(
         {
-          details: error.details,
-          error: error.message,
+          error: "Unable to load supported banks. Please try again.",
         },
         { status: error.status ?? 500 },
       );

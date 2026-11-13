@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 import { getWebUserSubject } from "@/lib/auth/web-user";
 import { saveBankConnection } from "@/lib/connections/store";
@@ -13,11 +12,12 @@ import {
 } from "@/lib/enable-banking/client";
 
 export async function GET(request: NextRequest) {
+  const subject = await getWebUserSubject(request);
+  if (!subject) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   const baseUrl = process.env.APP_BASE_URL?.trim() || request.nextUrl.origin;
   const code = request.nextUrl.searchParams.get("code")?.trim();
   const returnedState = request.nextUrl.searchParams.get("state")?.trim();
-  const cookieStore = await cookies();
-  const expectedState = cookieStore.get(ENABLE_BANKING_STATE_COOKIE)?.value;
+  const expectedState = request.cookies.get(ENABLE_BANKING_STATE_COOKIE)?.value;
 
   if (!code) {
     return NextResponse.redirect(new URL("/?error=Missing+authorisation+code", baseUrl));
@@ -25,14 +25,6 @@ export async function GET(request: NextRequest) {
 
   if (!expectedState || !returnedState || expectedState !== returnedState) {
     return NextResponse.redirect(new URL("/?error=State+mismatch", baseUrl));
-  }
-
-  const subject = await getWebUserSubject(request);
-
-  if (!subject) {
-    return NextResponse.redirect(
-      new URL("/login?error=session&next=/", baseUrl),
-    );
   }
 
   let createdSessionId: string | null = null;
@@ -58,24 +50,18 @@ export async function GET(request: NextRequest) {
 
     const response = NextResponse.redirect(new URL("/?connected=1", baseUrl));
 
-    response.cookies.set(ENABLE_BANKING_SESSION_COOKIE, sessionId, {
-      httpOnly: true,
-      maxAge: 60 * 60 * 24 * 30,
-      path: "/",
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-    });
+    response.cookies.delete(ENABLE_BANKING_SESSION_COOKIE);
     response.cookies.delete(ENABLE_BANKING_STATE_COOKIE);
 
     return response;
-  } catch (error) {
+  } catch {
     if (createdSessionId) {
-      await deleteSession(createdSessionId).catch((cleanupError) => {
-        console.error("Failed to revoke unpersisted Enable Banking session", cleanupError);
+      await deleteSession(createdSessionId).catch(() => {
+        console.error("Failed to revoke unpersisted Enable Banking session");
       });
     }
 
-    const message = error instanceof Error ? error.message : "Unable to create session";
+    const message = "Unable to save the bank connection. Please try again.";
     return NextResponse.redirect(
       new URL(`/?error=${encodeURIComponent(message)}`, baseUrl),
     );

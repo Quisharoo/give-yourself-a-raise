@@ -1,4 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
+
+import { getPrivateOwnerSubject } from "@/lib/auth/owner";
 
 export const AUTH_COOKIE_NAME = "gyr-auth";
 export const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 12;
@@ -8,7 +11,11 @@ type AuthConfig = {
   secret: string;
 };
 
-const AUTH_TOKEN_PAYLOAD = "v1";
+const sessionClaims = z.object({
+  sub: z.string().min(1),
+  iat: z.number().int().nonnegative(),
+  exp: z.number().int().nonnegative(),
+}).strict();
 
 export function hasAuthConfig() {
   return Boolean(process.env.APP_LOGIN_PASSWORD?.trim() && process.env.APP_LOGIN_SECRET?.trim());
@@ -29,33 +36,49 @@ export function readAuthConfig(): AuthConfig {
   return { password, secret };
 }
 
-export function createAuthSessionToken() {
+export function createAuthSessionToken(nowSeconds = Math.floor(Date.now() / 1000)) {
   const { secret } = readAuthConfig();
-  const signature = createHmac("sha256", secret).update(AUTH_TOKEN_PAYLOAD).digest("hex");
+  const subject = getPrivateOwnerSubject();
+  if (!subject) throw new Error("PRIVATE_PLUGIN_SUBJECT is required for app login.");
+  const claims = sessionClaims.parse({
+    sub: subject,
+    iat: nowSeconds,
+    exp: nowSeconds + AUTH_COOKIE_MAX_AGE_SECONDS,
+  });
+  const payload = `v2.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+  const signature = createHmac("sha256", secret).update(payload).digest("hex");
 
-  return `${AUTH_TOKEN_PAYLOAD}.${signature}`;
+  return `${payload}.${signature}`;
 }
 
-export function verifyAuthSessionToken(token: string | undefined | null) {
-  if (!token || !hasAuthConfig()) {
+export function verifyAuthSessionToken(
+  token: string | undefined | null,
+  nowSeconds = Math.floor(Date.now() / 1000),
+) {
+  const subject = getPrivateOwnerSubject();
+  if (!token || token.length > 2048 || !hasAuthConfig() || !subject || !Number.isSafeInteger(nowSeconds)) {
     return false;
   }
 
-  const [payload, signature] = token.split(".");
-
-  if (!payload || !signature) {
+  const parts = token.split(".");
+  const [version, encoded, signature] = parts;
+  if (parts.length !== 3 || version !== "v2" || !encoded || !/^[A-Za-z0-9_-]+$/.test(encoded) || !signature || !/^[a-f0-9]{64}$/.test(signature)) {
+    return false;
+  }
+  const { secret } = readAuthConfig();
+  const expected = createHmac("sha256", secret).update(`${version}.${encoded}`).digest();
+  if (!timingSafeEqual(expected, Buffer.from(signature, "hex"))) {
     return false;
   }
 
-  const expectedToken = createAuthSessionToken();
-  const expectedBuffer = Buffer.from(expectedToken);
-  const tokenBuffer = Buffer.from(token);
-
-  if (expectedBuffer.length !== tokenBuffer.length) {
+  try {
+    const result = sessionClaims.safeParse(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")));
+    if (!result.success) return false;
+    const { sub, iat, exp } = result.data;
+    return sub === subject && exp - iat === AUTH_COOKIE_MAX_AGE_SECONDS && iat <= nowSeconds && nowSeconds < exp;
+  } catch {
     return false;
   }
-
-  return timingSafeEqual(expectedBuffer, tokenBuffer);
 }
 
 export function passwordMatches(candidate: string) {

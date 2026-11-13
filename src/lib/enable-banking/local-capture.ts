@@ -10,7 +10,8 @@ type CapturePayload = {
 };
 
 export function shouldCaptureEnableBankingData() {
-  return process.env.ENABLE_BANKING_CAPTURE_LOCAL === "1";
+  return process.env.ENABLE_BANKING_CAPTURE_LOCAL === "1" &&
+    process.env.NODE_ENV !== "production" && process.env.VERCEL === undefined;
 }
 
 export async function writeEnableBankingCapture(
@@ -36,7 +37,7 @@ export async function writeEnableBankingCapture(
   try {
     await mkdir(runDirectory, { recursive: true });
     await writeFile(targetPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
-  } catch (error) {
-    console.error("Enable Banking local capture failed", error);
+  } catch {
+    console.error("Enable Banking local capture failed");
   }
 }
