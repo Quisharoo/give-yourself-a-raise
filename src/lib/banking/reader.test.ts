@@ -220,3 +220,63 @@ test("a failed account prevents a partial request from returning recurrence evid
     },
   );
 });
+
+for (const balances of [false, true])
+  for (const failed of [false, true])
+    test(`read observations exclude other accounts and resources with balances=${balances} and failed=${failed}`, async () => {
+      const deps = dependencies();
+      const linked = { accounts: ["private-account", "unselected-account"] };
+      await readBankAccounts(
+        connection,
+        { accounts: [...linked.accounts, "orphan-account"] },
+        deps,
+        range,
+        undefined,
+        "all",
+        true,
+      );
+      const before = await deps.getAccountFetchObservations(connection);
+      const selectedRef = accountRef(scope, "private-account");
+      if (failed)
+        deps.getAllAccountTransactions = async () => {
+          throw new Error("Synthetic provider failure");
+        };
+      const result = await readBankAccounts(
+        connection,
+        linked,
+        deps,
+        range,
+        [selectedRef],
+        "BOOK",
+        balances,
+      ).catch((error: unknown) => {
+        assert.ok(error instanceof BankReadError);
+        assert.equal(error.code, "bank_unavailable");
+        assert.equal(failed, true);
+        return error;
+      });
+      assert.equal(result instanceof BankReadError, failed);
+      assert.deepEqual(
+        result.dataStatus.map((row) => [row.account_ref, row.resource]),
+        balances
+          ? [[selectedRef, "transactions"], [selectedRef, "balances"]]
+          : [[selectedRef, "transactions"]],
+      );
+      const transaction = result.dataStatus[0];
+      assert.equal(transaction.last_result, failed ? "failed" : "success");
+      assert.equal(transaction.request.status, "BOOK");
+      assert.equal(transaction.last_success?.returned_count, 3);
+      if (failed)
+        assert.deepEqual(transaction.last_success, before[0].last_success);
+      const persisted = await deps.getAccountFetchObservations(connection);
+      assert.equal(persisted.length, before.length);
+      assert.deepEqual(
+        persisted.filter((row) => row.account_ref !== selectedRef),
+        before.filter((row) => row.account_ref !== selectedRef),
+      );
+      if (!balances)
+        assert.deepEqual(
+          persisted.filter((row) => row.resource === "balances"),
+          before.filter((row) => row.resource === "balances"),
+        );
+    });
