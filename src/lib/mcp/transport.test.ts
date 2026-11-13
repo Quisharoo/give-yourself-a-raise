@@ -1209,10 +1209,12 @@ test("strong references and overrides survive reconnects, with complete compact 
           transaction_ref: z.string(),
           account_ref: z.string(),
           override_supported: z.boolean(),
+          override_reason: z.string().nullable(),
         }),
       )
       .parse(content(first).transactions);
     assert.equal(firstRows[0].override_supported, true);
+    assert.equal(firstRows[0].override_reason, null);
     overrideRef = firstRows[0].transaction_ref;
     const oldCursor = content(first).next_cursor;
     generation++;

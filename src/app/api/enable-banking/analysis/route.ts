@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getWebUserSubject } from "@/lib/auth/web-user";
 import { getBankConnection } from "@/lib/connections/store";
 import { getClassificationSnapshot } from "@/lib/analysis/rule-store";
+import { observeAccountTransactionIdentities } from "@/lib/analysis/identity-observation";
 import { accountRef, dateRange } from "@/lib/mcp/transaction-query";
 import { analyzeSpending } from "@/lib/analysis/engine";
 import {
@@ -94,8 +95,10 @@ export async function GET(request: NextRequest) {
         account.accountId,
       );
     const range = dateRange(dateFrom, dateTo);
+    const rules = await getClassificationSnapshot(subject);
+    await observeAccountTransactionIdentities(overview.accounts, rules);
     const analysis = analyzeSpending(overview.accounts, {
-      rules: await getClassificationSnapshot(subject),
+      rules,
       windowDays: range.windowDays,
     });
 

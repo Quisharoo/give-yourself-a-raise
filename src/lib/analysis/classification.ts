@@ -390,12 +390,18 @@ export function normalizeTransaction(
     economicFlow = rule.flow_kind;
   if (
     override?.flow_kind &&
-    economicFlow !== "transfer" &&
+    !internal &&
     event !== "refund" &&
     event !== "reversal"
   )
     economicFlow = override.flow_kind;
-  if (funding && !internal && !rule?.flow_kind && economicFlow === "transfer")
+  if (
+    funding &&
+    !internal &&
+    !rule?.flow_kind &&
+    !override?.flow_kind &&
+    economicFlow === "transfer"
+  )
     classification = {
       ...classification,
       confidence: "low",
@@ -417,7 +423,9 @@ export function normalizeTransaction(
   return {
     transactionRef: context?.ref ?? null,
     overrideSupported: context?.supported ?? false,
-    overrideReason: context?.reason ?? "stable_account_identity_unavailable",
+    overrideReason: context
+      ? context.reason
+      : "stable_account_identity_unavailable",
     identityEvidence: context?.evidence ?? null,
     matchedOverride: override !== undefined,
     amountDecimal: formatDecimal(transactionMoney(transaction).signed),

@@ -8,6 +8,7 @@ import {
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
 import { analyzeSpending } from "@/lib/analysis/engine";
+import { observeAccountTransactionIdentities } from "@/lib/analysis/identity-observation";
 import {
   bankDependencies,
   readBankSession,
@@ -30,7 +31,6 @@ import {
   financialFilterShape,
   financialRuleSchema,
   transactionOverrideSchema,
-  normalizeAccountTransactions,
   type ClassificationSnapshot,
   type FinancialFilter,
 } from "@/lib/analysis/classification";
@@ -451,28 +451,11 @@ async function executeTool(
       status,
       balances,
     );
-    const identities = result.accounts
-      .flatMap((account) => normalizeAccountTransactions(account, rules))
-      .flatMap((row) =>
-        row.transactionRef && row.identityEvidence
-          ? [
-              {
-                transaction_ref: row.transactionRef,
-                evidence: row.identityEvidence,
-                supported: row.overrideSupported,
-              },
-            ]
-          : [],
-      );
-    const observed = await dependencies.observeTransactionIdentities(
-      subject,
-      identities,
+    await observeAccountTransactionIdentities(
+      result.accounts,
+      rules,
+      dependencies.observeTransactionIdentities,
     );
-    const unsupported = observed
-      .filter((row) => row.ambiguous)
-      .map((row) => row.transaction_ref);
-    for (const account of result.accounts)
-      account.unsupportedTransactionRefs = unsupported;
     dataStatus = result.dataStatus;
     return result;
   }

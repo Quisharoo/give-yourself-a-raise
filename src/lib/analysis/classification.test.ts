@@ -416,6 +416,7 @@ test("one-off overrides protect financial events and ambiguous bank identities",
     };
     const original = normalizeAccountTransactions(account, snapshot)[0];
     assert(original.transactionRef);
+    assert.equal(original.overrideSupported, true);
     const labels = {
       transaction_ref: original.transactionRef,
       purpose: "business" as const,
@@ -427,6 +428,25 @@ test("one-off overrides protect financial events and ambiguous bank identities",
       normalizeAccountTransactions(account, input)[0].purpose,
       "business",
     );
+    const amazonRule = INITIAL_OWNER_RULES.find((rule) => rule.id === "owner-amazon");
+    assert(amazonRule);
+    const transferRule: FinancialRule = {
+      ...amazonRule,
+      flow_kind: "transfer",
+    };
+    for (const code of ["CARD_PAYMENT", "TOPUP"]) {
+      const overridden = normalizeAccountTransactions(
+        {
+          ...account,
+          transactions: [{ ...account.transactions[0], bank_transaction_code: { code } }],
+        },
+        { ...input, rules: code === "CARD_PAYMENT" ? [transferRule] : [] },
+      )[0];
+      assert.equal(overridden.matchedOverride, true);
+      assert.equal(overridden.economicFlow, "expense");
+      assert.equal(overridden.classification.flowKind, "behavioural_spend");
+    }
+    assert.equal(original.overrideReason, null);
     const secondOwner = normalizeAccountTransactions(account, {
       ...input,
       subject: "another-owner",
