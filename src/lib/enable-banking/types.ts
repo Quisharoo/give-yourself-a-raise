@@ -56,9 +56,9 @@ export interface EnableBankingSession {
 export interface EnableBankingBalance {
   balance_amount: MoneyAmount;
   balance_type?: string;
-  last_change_date_time?: string;
+  last_change_date_time?: string | null;
   name?: string;
-  reference_date?: string;
+  reference_date?: string | null;
 }
 
 export interface EnableBankingBalancesResponse {
@@ -71,7 +71,7 @@ export interface EnableBankingTransaction {
     description?: string | null;
     sub_code?: string | null;
   };
-  booking_date?: string;
+  booking_date?: string | null;
   credit_debit_indicator?: "CRDT" | "DBIT";
   creditor?: EnableBankingParty;
   debtor?: EnableBankingParty;
@@ -81,9 +81,9 @@ export interface EnableBankingTransaction {
   remittance_information?: string[];
   status?: string;
   transaction_amount: MoneyAmount;
-  transaction_date?: string;
+  transaction_date?: string | null;
   transaction_id?: string;
-  value_date?: string;
+  value_date?: string | null;
 }
 
 export interface EnableBankingTransactionsResponse {

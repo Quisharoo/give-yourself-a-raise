@@ -136,7 +136,7 @@ export function validateTransactions(rows: EnableBankingTransaction[]) {
       row.value_date,
       row.transaction_date,
     ])
-      if (value !== undefined && !validCalendarDate(value))
+      if (value != null && !validCalendarDate(value))
         throw new TransactionInputError("Invalid bank transaction date.");
   }
 }
@@ -148,12 +148,12 @@ export function validateBalances(rows: EnableBankingBalance[]) {
     if (!/^[A-Z]{3}$/.test(balance.balance_amount?.currency ?? ""))
       throw new TransactionInputError("Invalid balance currency.");
     if (
-      balance.reference_date !== undefined &&
+      balance.reference_date != null &&
       !validCalendarDate(balance.reference_date)
     )
       throw new TransactionInputError("Invalid balance date.");
     if (
-      balance.last_change_date_time !== undefined &&
+      balance.last_change_date_time != null &&
       !Number.isFinite(Date.parse(balance.last_change_date_time))
     )
       throw new TransactionInputError("Invalid balance timestamp.");

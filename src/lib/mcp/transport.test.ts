@@ -436,12 +436,17 @@ test("MCP rejects invalid bank dates and amounts before recording success", asyn
   for (const bad of [
     { booking_date: "2026-02-30", amount: "1" },
     { booking_date: "2026-01-01", amount: "1e9" },
+    { booking_date: null, value_date: null, transaction_date: null, amount: "1" },
+    { booking_date: "2026-01-01", value_date: "not-a-date", amount: "1" },
+    { booking_date: "2026-01-01", transaction_date: "2026-02-30", amount: "1" },
   ]) {
     const { dependencies } = syntheticBank();
     dependencies.getAllAccountTransactions = async () => [
       {
         status: "BOOK",
         booking_date: bad.booking_date,
+        value_date: bad.value_date,
+        transaction_date: bad.transaction_date,
         credit_debit_indicator: "DBIT",
         transaction_amount: { amount: bad.amount, currency: "EUR" },
       },
@@ -457,6 +462,146 @@ test("MCP rejects invalid bank dates and amounts before recording success", asyn
         .array(z.object({ last_result: z.string(), last_success: z.null() }))
         .parse(content(failed).data_status)
         .every((row) => row.last_result === "failed"),
+    );
+  }
+});
+test("MCP summary and search accept nullable provider dates with exact values and successful coverage", async () => {
+  const { dependencies } = syntheticBank();
+  dependencies.getSession = async () => ({ accounts: ["private-account-one"] });
+  dependencies.getAccountBalances = async () => [
+    {
+      balance_amount: { amount: "9007199254740993.12345", currency: "EUR" },
+      reference_date: "2026-01-31",
+      last_change_date_time: null,
+    },
+  ];
+  dependencies.getAllAccountTransactions = async () =>
+    [
+      {
+        booking_date: "2026-01-15",
+        value_date: "2026-01-14",
+        transaction_date: null,
+      },
+      { booking_date: "2026-01-16", value_date: null, transaction_date: null },
+      { booking_date: null, value_date: "2026-01-17", transaction_date: null },
+      { booking_date: null, value_date: null, transaction_date: "2026-01-18" },
+    ].map((dates, index) => ({
+      ...dates,
+      status: "BOOK",
+      credit_debit_indicator: index === 3 ? "CRDT" : "DBIT",
+      entry_reference: `private-null-date-${index}`,
+      transaction_amount: {
+        amount: ["0.10", "0.20", "0.30", "1.00"][index],
+        currency: "EUR",
+      },
+    }));
+  const summaryResult = await call(dependencies, "get_account_summary", range);
+  assert.notEqual(summaryResult.isError, true);
+  const summary = content(summaryResult);
+  const [account] = z
+    .array(
+      z.object({
+        transaction_count: z.number(),
+        balances: z.array(z.record(z.string(), z.unknown())),
+      }),
+    )
+    .parse(summary.accounts);
+  assert.equal(account.transaction_count, 4);
+  assert.deepEqual(account.balances, [
+    {
+      amount_decimal: "9007199254740993.12345",
+      currency: "EUR",
+      type: null,
+      reference_date: "2026-01-31",
+      last_change_date_time: null,
+    },
+  ]);
+  const searchResult = await call(dependencies, "find_transactions", range);
+  assert.notEqual(searchResult.isError, true);
+  const search = content(searchResult);
+  assert.equal(search.matched_count, 4);
+  assert.deepEqual(search.totals, [
+    { currency: "EUR", count: 4, debit: "0.60", credit: "1.00", net: "0.40" },
+  ]);
+  assert.deepEqual(
+    z
+      .array(z.object({ date: z.string(), amount_decimal: z.string() }))
+      .parse(search.transactions)
+      .sort((left, right) => left.date.localeCompare(right.date)),
+    [
+      { date: "2026-01-15", amount_decimal: "-0.10" },
+      { date: "2026-01-16", amount_decimal: "-0.20" },
+      { date: "2026-01-17", amount_decimal: "-0.30" },
+      { date: "2026-01-18", amount_decimal: "1.00" },
+    ],
+  );
+  for (const output of [summary, search]) {
+    const statuses = z
+      .array(
+        z.object({
+          resource: z.string(),
+          last_result: z.literal("success"),
+          last_success: z.object({
+            returned_count: z.number(),
+            pagination_complete: z.literal(true),
+            earliest_transaction_date: z.string().nullable(),
+            latest_transaction_date: z.string().nullable(),
+            latest_booked_transaction_date: z.string().nullable(),
+          }),
+        }),
+      )
+      .parse(output.data_status);
+    assert.equal(statuses.length, 2);
+    assert.deepEqual(
+      statuses.find((row) => row.resource === "transactions")?.last_success,
+      {
+        returned_count: 4,
+        pagination_complete: true,
+        earliest_transaction_date: "2026-01-15",
+        latest_transaction_date: "2026-01-18",
+        latest_booked_transaction_date: "2026-01-18",
+      },
+    );
+    assert.equal(
+      statuses.find((row) => row.resource === "balances")?.last_success
+        .returned_count,
+      1,
+    );
+  }
+});
+test("MCP malformed non-null balance dates fail without successful balance coverage", async () => {
+  for (const dates of [
+    { reference_date: "2026-02-30", last_change_date_time: null },
+    { reference_date: null, last_change_date_time: "not-a-timestamp" },
+  ]) {
+    const { dependencies } = syntheticBank();
+    dependencies.getAccountBalances = async () => [
+      {
+        balance_amount: { amount: "10.00", currency: "EUR" },
+        ...dates,
+      },
+    ];
+    const failed = await call(dependencies, "get_account_summary", range);
+    assert.equal(failed.isError, true);
+    assert.equal(
+      z.object({ code: z.string() }).parse(content(failed).error).code,
+      "invalid_bank_data",
+    );
+    const balances = z
+      .array(
+        z.object({
+          resource: z.string(),
+          last_result: z.string(),
+          last_success: z.unknown(),
+        }),
+      )
+      .parse(content(failed).data_status)
+      .filter((row) => row.resource === "balances");
+    assert.equal(balances.length, 2);
+    assert.ok(
+      balances.every(
+        (row) => row.last_result === "failed" && row.last_success === null,
+      ),
     );
   }
 });
